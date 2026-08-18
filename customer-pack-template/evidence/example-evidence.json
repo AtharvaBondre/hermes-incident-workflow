@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "issue_id": "EXAMPLE-001",
+  "logs": [
+    {
+      "timestamp": "2026-01-01T00:00:00Z",
+      "service": "backend",
+      "message": "Synthetic bounded log record for a dry run."
+    }
+  ],
+  "database_rows": [
+    {
+      "view": "incident_context",
+      "record_id": "example-record-1",
+      "state": "synthetic"
+    }
+  ],
+  "redactions": [],
+  "limits": {
+    "maximum_log_records": 100,
+    "maximum_database_rows": 20
+  }
+}

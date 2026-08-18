@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "issue_id": "EXAMPLE-001",
+  "repository": "example-org/example-service",
+  "base_revision": "replace-with-reviewed-base-revision",
+  "service": "backend",
+  "component": "event-consumer",
+  "environment": "staging",
+  "evidence_window_minutes": 10,
+  "summary": "Synthetic event processing failure used to qualify the workflow.",
+  "instructions": "Use only the bounded evidence and allowed repository paths. Prepare a minimal candidate and run the required test command."
+}

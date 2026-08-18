@@ -1,5 +1,10 @@
 # Adapting the workflow
 
+For a real organization, start by copying `customer-pack-template/` into a
+private location and filling in the policy and broker contracts there. Keep this
+public repository limited to reusable controller code, synthetic fixtures, and
+generic documentation.
+
 ## Start with a new synthetic scenario
 
 1. Add a minimal buggy repository under `fixtures/repositories/<scenario>/`.
@@ -17,6 +22,11 @@ Keep customer names, real identifiers, internal endpoints, credentials, and reta
 Edit `config/workflow.json` to select the fixture repository contract, allowed service and environment, path prefixes, evidence caps, required test, Hermes profile, and hard limits.
 
 Policy is trusted operator input. Do not derive these values from incident text or model output.
+
+For a customer pack, keep the public `config/workflow.json` as an example and
+store the real policy in the private pack. Do not publish repository names,
+internal evidence sources, channels, reviewers, or provider decisions unless the
+owner has explicitly approved publication.
 
 ## Add another language
 
@@ -42,6 +52,10 @@ Do not let free-form model text become a database query, log query, shell comman
 Accept only a verified run ID, exact patch digest, candidate digest, target repository, and approved metadata. Expose only the minimum draft operation required.
 
 Keep merge, approval, deployment, protected-branch bypass, incident mutation, and production writes out of the model-facing interface.
+
+The public workflow should keep file-based draft mocks. Live delivery adapters
+belong in customer packs until their permissions, branch protection, retry
+behavior, and message redaction have been reviewed.
 
 ## Real-model qualification
 

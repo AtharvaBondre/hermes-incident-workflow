@@ -143,7 +143,9 @@ Artifacts are local audit evidence, not immutable attestations. Do not commit th
 
 ## Extend the workflow
 
-Start with [Adapting the workflow](docs/adapting-the-workflow.md). Preserve the control boundary when adding another fixture, language, verifier, or brokered connector.
+Start with [Customer packs](docs/customer-packs.md), then use
+[Adapting the workflow](docs/adapting-the-workflow.md). Preserve the control
+boundary when adding another fixture, language, verifier, or brokered connector.
 
 Live observability, database, source-control, notification, and cloud connectors are intentionally absent. Automatic merge, approval, deployment, production writes, and incident mutation are out of scope.
 
@@ -151,7 +153,9 @@ Live observability, database, source-control, notification, and cloud connectors
 
 - [Architecture](docs/architecture.md)
 - [Threat model](docs/threat-model.md)
+- [Customer packs](docs/customer-packs.md)
 - [Adapting the workflow](docs/adapting-the-workflow.md)
+- [Product roadmap](docs/product-roadmap.md)
 - [Verification status](docs/verification.md)
 - [Container security baseline](docs/security-baseline.md)
 - [Release checklist](docs/release-checklist.md)

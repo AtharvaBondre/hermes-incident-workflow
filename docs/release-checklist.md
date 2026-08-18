@@ -14,4 +14,6 @@
 - [ ] Review GitHub Actions permissions and pinned action commits.
 - [ ] Confirm generated artifacts, sessions, credentials, and local paths are ignored and absent from Git.
 - [ ] Confirm README limitations match the tested release.
+- [ ] Confirm `customer-pack-template/` contains only placeholders and synthetic
+      examples.
 - [ ] Tag only after CI passes on the published commit.

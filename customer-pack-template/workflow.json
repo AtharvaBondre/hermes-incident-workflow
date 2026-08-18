@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "id": "example-org/example-service",
+    "allowed_services": [
+      "backend"
+    ],
+    "allowed_environments": [
+      "staging"
+    ],
+    "allowed_patch_prefixes": [
+      "app/"
+    ]
+  },
+  "evidence": {
+    "maximum_window_minutes": 15,
+    "maximum_log_records": 100,
+    "maximum_database_rows": 20,
+    "allowed_database_views": [
+      "incident_context"
+    ]
+  },
+  "validation": {
+    "required_test_argv": [
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-v"
+    ]
+  },
+  "hermes": {
+    "profile": "hermes-incident-workflow",
+    "skill": "hermes-incident-remediation",
+    "maximum_attempt_seconds": 300
+  },
+  "limits": {
+    "hard_maximum_attempts": 5,
+    "hard_maximum_remediation_seconds": 1500
+  }
+}
