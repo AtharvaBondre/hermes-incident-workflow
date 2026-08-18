@@ -1,0 +1,26 @@
+[project]
+name = "hermes-incident-workflow"
+version = "0.1.0"
+description = "A local-first reference workflow for bounded AI incident remediation with Hermes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Hermes Incident Workflow contributors" }
+]
+keywords = ["ai-agents", "incident-remediation", "hermes", "sandbox", "verification"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12"
+]
+dependencies = []
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

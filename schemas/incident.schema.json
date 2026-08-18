@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hermes-incident-workflow/incident.schema.json",
+  "title": "Untrusted incident packet",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "issue_id", "repository", "base_revision", "service", "environment", "evidence_window_minutes", "summary", "instructions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "issue_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "repository": {"type": "string", "minLength": 1, "maxLength": 200},
+    "base_revision": {"type": "string", "minLength": 1, "maxLength": 200},
+    "service": {"type": "string", "minLength": 1, "maxLength": 100},
+    "component": {"type": "string", "minLength": 1, "maxLength": 100},
+    "environment": {"type": "string", "minLength": 1, "maxLength": 100},
+    "evidence_window_minutes": {"type": "integer", "minimum": 1},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "instructions": {"type": "string", "minLength": 1, "maxLength": 4000}
+  }
+}

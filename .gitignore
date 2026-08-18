@@ -1,0 +1,22 @@
+# Credentials and local profile state
+.env
+.env.*
+auth.json
+state.db*
+sessions/
+memories/
+logs/
+workspace/
+
+# Local proof output
+artifacts/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Editor and OS noise
+.DS_Store

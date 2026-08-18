@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "issue_id": "DEMO-INC-042",
+  "source": "synthetic-fixture",
+  "classification": "synthetic-only",
+  "findings": [
+    "The event replay identity omits tenant_id and revision, so a valid event from another tenant or a newer revision is suppressed as a duplicate.",
+    "The OpenSearch document identity omits tenant_id and includes revision, so tenants can collide while newer revisions create extra documents instead of updating the tenant record document."
+  ],
+  "repair_constraints": [
+    "Event identity must include event type, tenant, provider, external record ID, and revision.",
+    "Document identity must include tenant, provider, and external record ID but remain stable across revisions and event types.",
+    "Only the allowlisted application files may change and repository tests must pass."
+  ]
+}

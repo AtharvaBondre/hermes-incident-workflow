@@ -1,0 +1,77 @@
+model:
+  default: mock-model
+  provider: workflow-local
+
+providers:
+  workflow-local:
+    api: http://127.0.0.1:8000/v1
+    transport: chat_completions
+    default_model: mock-model
+    models:
+      mock-model: {}
+
+terminal:
+  backend: docker
+  cwd: /workspace
+  home_mode: profile
+  docker_image: "python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134"
+  docker_mount_cwd_to_workspace: false
+  docker_run_as_host_user: false
+  docker_forward_env: []
+  docker_env:
+    HIW_SANDBOX_MODE: local-fixture
+  docker_volumes:
+    - "${HIW_HERMES_INPUT}:/input:ro"
+    - "${HIW_HERMES_TASK}:/task/sandbox_task.py:ro"
+    - "${HIW_HERMES_OUTPUT}:/output:rw"
+  docker_extra_args:
+    - "--rm"
+    - "--pull=never"
+    - "--read-only"
+  docker_network: false
+  container_cpu: 1
+  container_memory: 1024
+  container_disk: 0
+  container_persistent: false
+  docker_persist_across_processes: false
+  docker_orphan_reaper: true
+  timeout: 60
+  lifetime_seconds: 120
+
+agent:
+  max_turns: 20
+  disabled_toolsets:
+    - memory
+    - web
+    - browser
+    - delegation
+    - code_execution
+    - cronjob
+    - bfl
+    - kanban
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+
+platform_toolsets:
+  cli:
+    - terminal
+    - no_mcp
+
+mcp_servers: {}
+
+plugins:
+  enabled: []
+  disabled: []
+
+skills:
+  inline_shell: false
+
+curator:
+  enabled: false
+
+approvals:
+  mode: manual
+  timeout: 1
+  cron_mode: deny

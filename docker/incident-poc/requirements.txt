@@ -1,0 +1,12 @@
+# Runtime-only verifier dependencies. Hashes are the wheel SHA-256 values from
+# the official PyPI JSON API. The psycopg-binary hashes cover the supported
+# linux/amd64 and linux/arm64 variants of the pinned Alpine Python image.
+kafka-python==2.3.2 \
+    --hash=sha256:e8a5e6f2c4ce13a8041669337038d5125e0e09e6d6f0911902ae5939e5b9595e
+psycopg==3.2.9 \
+    --hash=sha256:01a8dadccdaac2123c916208c96e06631641c0566b22005493f09663c7a8d3b6
+psycopg-binary==3.2.9 \
+    --hash=sha256:14f64d1ac6942ff089fc7e926440f7a5ced062e2ed0949d7d2d680dc5c00e2d4 \
+    --hash=sha256:52e239cd66c4158e412318fbe028cd94b0ef21b0707f56dcb4bdc250ee58fd40
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

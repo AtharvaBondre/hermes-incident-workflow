@@ -1,0 +1,14 @@
+diff --git a/app/idempotency.py b/app/idempotency.py
+index 2cc0d1d8bdfac75d4cd063cbc0546b4389cc1ba3..dd30a785b972a564c3cca75a842014d6fc401cad 100644
+--- a/app/idempotency.py
++++ b/app/idempotency.py
+@@ -12 +12 @@ def event_identity(event: RecordEvent) -> str:
+-    return f"{event.event_type}:{event.provider}:{event.external_record_id}"
++    return f"{event.event_type}:{event.provider}:{event.external_record_id}:{event.tenant_id}:{event.revision}"
+diff --git a/app/search_documents.py b/app/search_documents.py
+index 4bef6519c0391cc2735e4e36d0aaf8cc4558ad0d..c7c7ed43e5929667002575c2f0a9b2d27ea2b877 100644
+--- a/app/search_documents.py
++++ b/app/search_documents.py
+@@ -12 +12 @@ def document_identity(event: RecordEvent) -> str:
+-    return f"{event.provider}:{event.external_record_id}:{event.revision}"
++    return f"{event.tenant_id}:{event.provider}:{event.external_record_id}"

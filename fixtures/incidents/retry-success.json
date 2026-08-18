@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "issue_id": "DEMO-INC-001",
+  "repository": "example-org/event-indexer",
+  "base_revision": "fixture-base-v1",
+  "service": "backend",
+  "environment": "prod",
+  "evidence_window_minutes": 10,
+  "summary": "Subjects containing repeated whitespace are not normalized consistently.",
+  "instructions": "Reproduce the normalization failure and prepare the smallest verified fix."
+}

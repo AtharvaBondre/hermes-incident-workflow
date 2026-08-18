@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "data_classification": "synthetic-only",
+  "issue_id": "DEMO-INC-042",
+  "repository": "example-org/event-indexer",
+  "base_revision": "fixture-event-indexing-collision-v1",
+  "service": "backend",
+  "component": "kafka-consumer",
+  "environment": "prod",
+  "evidence_window_minutes": 10,
+  "summary": "A completed record can be missing from search when two tenants receive the same provider record identifier.",
+  "instructions": "Use the bounded log and read-only database evidence to identify the collision. Prepare the smallest application-code fix that keeps exact event replays idempotent, allows newer revisions to be processed, isolates tenants, and keeps one search document per tenant record across revisions."
+}

@@ -1,0 +1,27 @@
+diff --git a/app/subject.py b/app/subject.py
+index 2d79b58..8537618 100644
+--- a/app/subject.py
++++ b/app/subject.py
+@@ -3 +3 @@ def normalize_subject(value: str) -> str:
+-    return value.strip()
++    return " ".join(value.split()).lower()
+diff --git a/tests/test_subject.py b/tests/test_subject.py
+deleted file mode 100644
+--- a/tests/test_subject.py
++++ /dev/null
+@@ -1,15 +0,0 @@
+-import unittest
+-
+-from app.subject import normalize_subject
+-
+-
+-class NormalizeSubjectTests(unittest.TestCase):
+-    def test_normalizes_case_and_repeated_whitespace(self) -> None:
+-        self.assertEqual(normalize_subject("  Payment   FAILED  "), "payment failed")
+-
+-    def test_preserves_empty_subject(self) -> None:
+-        self.assertEqual(normalize_subject("   "), "")
+-
+-
+-if __name__ == "__main__":
+-    unittest.main()

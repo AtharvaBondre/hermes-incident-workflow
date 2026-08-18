@@ -1,0 +1,61 @@
+\set ON_ERROR_STOP on
+
+CREATE ROLE evidence_reader
+  LOGIN
+  PASSWORD :'evidence_reader_password'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+
+CREATE ROLE incident_app
+  LOGIN
+  PASSWORD :'incident_app_password'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+
+GRANT CONNECT ON DATABASE incident_poc TO evidence_reader, incident_app;
+
+CREATE SCHEMA evidence AUTHORIZATION incident_admin;
+REVOKE ALL ON SCHEMA evidence FROM PUBLIC;
+
+CREATE TABLE evidence.record_evidence (
+  evidence_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id text NOT NULL,
+  provider text NOT NULL,
+  external_record_id text NOT NULL,
+  observed_revision integer NOT NULL CHECK (observed_revision > 0),
+  observed_state text NOT NULL,
+  observed_at timestamptz NOT NULL
+);
+
+INSERT INTO evidence.record_evidence (
+  tenant_id,
+  provider,
+  external_record_id,
+  observed_revision,
+  observed_state,
+  observed_at
+) VALUES
+  ('org-alpha', 'source-a', 'shared-42', 7, 'indexed', '2026-08-17T09:14:03Z'),
+  ('org-beta', 'source-a', 'shared-42', 7, 'missing', '2026-08-17T09:14:07Z');
+
+REVOKE ALL ON evidence.record_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA evidence TO evidence_reader;
+GRANT SELECT ON evidence.record_evidence TO evidence_reader;
+
+CREATE SCHEMA incident AUTHORIZATION incident_admin;
+REVOKE ALL ON SCHEMA incident FROM PUBLIC;
+
+CREATE TABLE incident.idempotency_ledger (
+  event_key text PRIMARY KEY,
+  tenant_id text NOT NULL,
+  provider text NOT NULL,
+  external_record_id text NOT NULL,
+  revision integer NOT NULL CHECK (revision > 0),
+  kafka_topic text NOT NULL,
+  kafka_partition integer NOT NULL,
+  kafka_offset bigint NOT NULL,
+  event_payload jsonb NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+REVOKE ALL ON incident.idempotency_ledger FROM PUBLIC;
+GRANT USAGE ON SCHEMA incident TO incident_app;
+GRANT SELECT, INSERT, DELETE ON incident.idempotency_ledger TO incident_app;

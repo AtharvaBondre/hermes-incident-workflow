@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hermes-incident-workflow/candidate.schema.json",
+  "title": "Controller candidate contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "attempt", "patch", "patch_sha256", "changed_paths", "candidate_digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {"type": "string", "minLength": 1, "maxLength": 100},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 5},
+    "patch": {"type": "string", "pattern": "^[A-Za-z0-9._-]+\\.patch$"},
+    "patch_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "changed_paths": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+    "candidate_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

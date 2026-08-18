@@ -1,0 +1,7 @@
+diff --git a/app/subject.py b/app/subject.py
+index 2d79b58..148096a 100644
+--- a/app/subject.py
++++ b/app/subject.py
+@@ -3 +3 @@ def normalize_subject(value: str) -> str:
+-    return value.strip()
++    return value.strip().lower()

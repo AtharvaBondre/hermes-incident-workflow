@@ -1,0 +1,6 @@
+Hermes Incident Workflow
+Copyright 2026 Hermes Incident Workflow contributors
+
+This project integrates with the separately installed Hermes Agent project.
+Hermes Agent is not vendored here and remains subject to its own license and
+trademark terms.

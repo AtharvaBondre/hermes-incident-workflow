@@ -1,0 +1,41 @@
+{
+  "retry-success": {
+    "incident": "incidents/retry-success.json",
+    "patches": ["patches/incomplete.patch", "patches/correct.patch"],
+    "repeat_last_patch": false,
+    "expected_outcome": "SUCCEEDED"
+  },
+  "exhausted": {
+    "incident": "incidents/exhausted.json",
+    "patches": ["patches/incomplete.patch"],
+    "repeat_last_patch": true,
+    "expected_outcome": "FAILED"
+  },
+  "reject-injection": {
+    "incident": "incidents/reject-injection.json",
+    "patches": [],
+    "repeat_last_patch": false,
+    "expected_outcome": "REJECTED"
+  },
+  "timeout": {
+    "incident": "incidents/retry-success.json",
+    "patches": ["patches/correct.patch"],
+    "repeat_last_patch": false,
+    "simulate_delay_seconds": 0.02,
+    "expected_outcome": "TIMED_OUT"
+  },
+  "event-indexing-collision": {
+    "incident": "incidents/event-indexing-collision.json",
+    "evidence": "evidence/event-indexing-collision.json",
+    "diagnosis": "diagnoses/event-indexing-collision.json",
+    "execution_plan": "execution-plans/event-indexing-collision.json",
+    "repository": "repositories/event-indexing-collision",
+    "controller_verifier": "verifiers/event_indexing_logic.py",
+    "compose_file": "compose.event-indexing.yaml",
+    "compose_service": "verifier",
+    "compose_environment": "incident",
+    "patches": ["patches/event-indexing-collision-correct.patch"],
+    "repeat_last_patch": false,
+    "expected_outcome": "SUCCEEDED"
+  }
+}

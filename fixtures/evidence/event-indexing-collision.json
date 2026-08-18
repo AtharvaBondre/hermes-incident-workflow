@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "data_classification": "synthetic-only",
+  "incident_id": "DEMO-INC-042",
+  "query_policy": {
+    "logs": {
+      "service": "backend",
+      "component": "kafka-consumer",
+      "environment": "prod",
+      "window_minutes": 10,
+      "limit": 100
+    },
+    "database": {
+      "operation": "SELECT",
+      "view": "incident_record_indexing_context",
+      "limit": 20
+    }
+  },
+  "logs": [
+    {
+      "timestamp": "2026-08-17T09:14:02Z",
+      "labels": {
+        "service": "backend",
+        "component": "kafka-consumer",
+        "environment": "prod"
+      },
+      "message": "record.ready received tenant=org-alpha provider=source-a external_record_id=shared-42 revision=7 request_id=req-synthetic-101"
+    },
+    {
+      "timestamp": "2026-08-17T09:14:03Z",
+      "labels": {
+        "service": "backend",
+        "component": "kafka-consumer",
+        "environment": "prod"
+      },
+      "message": "record indexed tenant=org-alpha document_id=source-a:shared-42:7 revision=7 request_id=req-synthetic-101"
+    },
+    {
+      "timestamp": "2026-08-17T09:14:06Z",
+      "labels": {
+        "service": "backend",
+        "component": "kafka-consumer",
+        "environment": "prod"
+      },
+      "message": "event identity collision key=record.ready:source-a:shared-42 existing_tenant=org-alpha incoming_tenant=org-beta incoming_revision=7 request_id=req-synthetic-204"
+    },
+    {
+      "timestamp": "2026-08-17T09:14:07Z",
+      "labels": {
+        "service": "backend",
+        "component": "kafka-consumer",
+        "environment": "prod"
+      },
+      "message": "search identity collision document_id=source-a:shared-42:7 existing_tenant=org-alpha incoming_tenant=org-beta action=suppressed request_id=req-synthetic-204"
+    }
+  ],
+  "database": {
+    "view": "incident_record_indexing_context",
+    "read_only": true,
+    "rows": [
+      {
+        "incident_id": "DEMO-INC-042",
+        "tenant_id": "org-alpha",
+        "record_id": "meet-blue-101",
+        "provider": "source-a",
+        "external_record_id": "shared-42",
+        "record_revision": 7,
+        "record_status": "record_ready",
+        "search_status": "indexed"
+      },
+      {
+        "incident_id": "DEMO-INC-042",
+        "tenant_id": "org-beta",
+        "record_id": "meet-gold-204",
+        "provider": "source-a",
+        "external_record_id": "shared-42",
+        "record_revision": 7,
+        "record_status": "record_ready",
+        "search_status": "missing"
+      }
+    ]
+  }
+}

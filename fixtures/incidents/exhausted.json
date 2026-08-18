@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "issue_id": "DEMO-INC-002",
+  "repository": "example-org/event-indexer",
+  "base_revision": "fixture-base-v1",
+  "service": "backend",
+  "environment": "prod",
+  "evidence_window_minutes": 10,
+  "summary": "The supplied candidate never fully fixes subject normalization.",
+  "instructions": "Attempt a bounded repair and stop when the controller refuses another attempt."
+}

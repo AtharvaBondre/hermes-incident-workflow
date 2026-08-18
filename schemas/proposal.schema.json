@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hermes-incident-workflow/proposal.schema.json",
+  "title": "Untrusted Hermes proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attempt", "status", "changed_paths", "required_test", "rationale", "uncertainty"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 5},
+    "status": {"enum": ["candidate_ready", "blocked"]},
+    "changed_paths": {"type": "array", "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+    "required_test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "exit_code"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1, "maxLength": 500},
+        "exit_code": {"type": "integer"}
+      }
+    },
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "uncertainty": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 500}}
+  }
+}

@@ -1,0 +1,60 @@
+name: Disposable service integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: disposable-service-integration
+  cancel-in-progress: false
+
+jobs:
+  event-indexing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Configure OpenSearch host limit
+        run: sudo sysctl -w vm.max_map_count=262144
+
+      - name: Bootstrap digest-pinned integration images
+        run: ./scripts/bootstrap-pinned-images.sh all
+
+      - name: Preflight Docker configuration
+        run: ./scripts/run-local.sh preflight --with-docker
+
+      - name: Run and verify synthetic service scenario
+        run: |
+          ./scripts/run-local.sh run \
+            --scenario event-indexing-collision \
+            --budget-seconds 900 \
+            --max-attempts 2 \
+            --with-docker
+          ./scripts/run-local.sh verify --latest
+
+      - name: Assert scoped resources are gone
+        if: always()
+        run: |
+          if docker ps -a --format '{{.Names}}' | grep -q '^hiw'; then
+            docker ps -a
+            exit 1
+          fi
+          if docker volume ls --format '{{.Name}}' | grep -q '^hiw'; then
+            docker volume ls
+            exit 1
+          fi
+          if docker network ls --format '{{.Name}}' | grep -q '^hiw'; then
+            docker network ls
+            exit 1
+          fi

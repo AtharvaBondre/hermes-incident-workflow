@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hermes Incident Remediation"
+  short_description: "Prepare bounded, verifiable incident fixes"
+  default_prompt: "Use $hermes-incident-remediation to prepare a minimal verified fix from controller-supplied incident evidence."

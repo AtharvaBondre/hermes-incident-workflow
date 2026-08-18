@@ -1,0 +1,146 @@
+name: ${HIW_INCIDENT_PROJECT_NAME:-hermes-event-indexing-poc}
+
+services:
+  postgres:
+    image: postgres:14.24-alpine@sha256:727876d274666da0b92a445390ba093c84b8e9f8343e1c53cd4e9a7ab2d85310
+    environment:
+      POSTGRES_DB: incident_poc
+      POSTGRES_USER: incident_admin
+      POSTGRES_PASSWORD: ${HIW_POSTGRES_PASSWORD:?controller must set HIW_POSTGRES_PASSWORD}
+      EVIDENCE_READER_PASSWORD: ${HIW_EVIDENCE_READER_PASSWORD:?controller must set HIW_EVIDENCE_READER_PASSWORD}
+      INCIDENT_APP_PASSWORD: ${HIW_INCIDENT_APP_PASSWORD:?controller must set HIW_INCIDENT_APP_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incident_admin -d incident_poc"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks: [incident]
+    volumes:
+      - incident-postgres-data:/var/lib/postgresql/data
+      - ./integration/postgres-init:/docker-entrypoint-initdb.d:ro
+    restart: "no"
+    stop_grace_period: 10s
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 128
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      options:
+        max-size: 10m
+        max-file: "2"
+
+  kafka:
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_NUM_PARTITIONS: "1"
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 8s
+      retries: 24
+      start_period: 20s
+    networks: [incident]
+    volumes: ["incident-kafka-data:/tmp/kraft-combined-logs"]
+    restart: "no"
+    stop_grace_period: 15s
+    mem_limit: 1g
+    cpus: 1.00
+    pids_limit: 256
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      options:
+        max-size: 10m
+        max-file: "2"
+
+  opensearch:
+    image: opensearchproject/opensearch:3.8.0@sha256:bcc1797519726ceb6d651d4a3e60b7c30da91793914a8dfe75fd441d4f641509
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      bootstrap.memory_lock: "false"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s' | grep -Eq '\"status\":\"(yellow|green)\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 45s
+    networks: [incident]
+    volumes: ["incident-opensearch-data:/usr/share/opensearch/data"]
+    restart: "no"
+    stop_grace_period: 20s
+    mem_limit: 1280m
+    cpus: 1.00
+    pids_limit: 512
+    security_opt: ["no-new-privileges:true"]
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      options:
+        max-size: 10m
+        max-file: "2"
+
+  verifier:
+    build:
+      context: ./docker/incident-poc
+      dockerfile: Dockerfile
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+    environment:
+      CANDIDATE_ROOT: /candidate
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: incident_poc
+      EVIDENCE_READER_USER: evidence_reader
+      EVIDENCE_READER_PASSWORD: ${HIW_EVIDENCE_READER_PASSWORD:?controller must set HIW_EVIDENCE_READER_PASSWORD}
+      INCIDENT_APP_USER: incident_app
+      INCIDENT_APP_PASSWORD: ${HIW_INCIDENT_APP_PASSWORD:?controller must set HIW_INCIDENT_APP_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENSEARCH_URL: http://opensearch:9200
+      INCIDENT_TIMEOUT_SECONDS: "90"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${HIW_INCIDENT_CANDIDATE:?set HIW_INCIDENT_CANDIDATE to a candidate workspace}:/candidate:ro
+      - ./integration/event_indexing_verifier.py:/verifier/event_indexing_verifier.py:ro
+    networks: [incident]
+    read_only: true
+    tmpfs: ["/tmp:size=32m,noexec,nosuid,nodev"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 256m
+    cpus: 0.50
+    pids_limit: 128
+    logging:
+      options:
+        max-size: 10m
+        max-file: "2"
+
+networks:
+  incident:
+    internal: true
+
+volumes:
+  incident-postgres-data:
+  incident-kafka-data:
+  incident-opensearch-data:

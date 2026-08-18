@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "issue_id": "DEMO-INC-042",
+  "controller_approved": true,
+  "source": "synthetic-fixture",
+  "edits": [
+    {
+      "path": "app/idempotency.py",
+      "old_fragment": "return f\"{event.event_type}:{event.provider}:{event.external_record_id}\"",
+      "new_fragment": "return f\"{event.event_type}:{event.provider}:{event.external_record_id}:{event.tenant_id}:{event.revision}\""
+    },
+    {
+      "path": "app/search_documents.py",
+      "old_fragment": "return f\"{event.provider}:{event.external_record_id}:{event.revision}\"",
+      "new_fragment": "return f\"{event.tenant_id}:{event.provider}:{event.external_record_id}\""
+    }
+  ],
+  "required_test": "python -m unittest discover -s tests -v"
+}

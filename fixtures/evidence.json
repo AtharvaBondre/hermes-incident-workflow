@@ -1,0 +1,31 @@
+{
+  "logs": [
+    {
+      "timestamp": "2026-08-02T12:00:00Z",
+      "labels": {"service": "backend", "environment": "prod"},
+      "message": "subject normalization failed for person@example.invalid token=synthetic-sensitive-value"
+    },
+    {
+      "timestamp": "2026-08-02T12:00:03Z",
+      "labels": {"service": "backend", "environment": "prod"},
+      "message": "input contained repeated whitespace; request_id=req-mock-001"
+    },
+    {
+      "timestamp": "2026-08-02T12:00:05Z",
+      "labels": {"service": "unrelated", "environment": "prod"},
+      "message": "this record must not be returned"
+    }
+  ],
+  "database": {
+    "view": "incident_context",
+    "rows": [
+      {
+        "incident_id": "DEMO-INC-001",
+        "status": "failed",
+        "subject_sample": "  Payment   FAILED  ",
+        "customer_email": "person@example.invalid",
+        "api_key": "synthetic-sensitive-value"
+      }
+    ]
+  }
+}

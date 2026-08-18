@@ -1,0 +1,11 @@
+name: hermes-incident-workflow
+version: 0.1.0
+description: "Isolated Hermes profile for bounded local incident-remediation workflows"
+hermes_requires: "==0.19.1"
+author: "Hermes Incident Workflow contributors"
+
+distribution_owned:
+  - SOUL.md
+  - config.yaml
+  - .no-bundled-skills
+  - skills/hermes-incident-remediation

@@ -1,0 +1,11 @@
+.git
+.github
+artifacts
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+sessions
+logs
+workspace
