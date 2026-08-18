@@ -7,7 +7,10 @@ scope="${1:-sandbox}"
 
 case "${scope}" in
   sandbox)
-    sources=("${repository_root}/hermes-profile/config.yaml")
+    sources=(
+      "${repository_root}/hermes-profile/config.yaml"
+      "${repository_root}/docker/incident-poc/Dockerfile"
+    )
     ;;
   all)
     sources=(
