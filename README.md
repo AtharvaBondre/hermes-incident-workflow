@@ -55,6 +55,7 @@ From the repository root:
 ```bash
 ./scripts/bootstrap-pinned-images.sh sandbox
 ./scripts/run-local.sh preflight
+./scripts/run-local.sh dump-policy
 ./scripts/run-local.sh test
 
 ./scripts/run-local.sh run \
@@ -66,6 +67,21 @@ From the repository root:
 ```
 
 The `retry-success` fixture deliberately fails the first candidate, returns bounded controller feedback, accepts the second candidate, recreates the exact candidate in a clean workspace, writes draft delivery mocks, and cleans up.
+
+## Inspect the effective policy
+
+Before running a customer adaptation, inspect the resolved controller-owned
+policy:
+
+```bash
+./scripts/run-local.sh dump-policy
+```
+
+The output shows the active repository contract, allowed services and
+environments, patch prefixes, evidence caps, required test command, Hermes
+profile and skill, hard limits, delivery authority, and safety-mode pattern. Use
+this as the operator review surface before enabling a private customer pack.
+Incident content cannot change these values.
 
 ## Disposable service example
 
@@ -156,6 +172,7 @@ Live observability, database, source-control, notification, and cloud connectors
 - [Customer packs](docs/customer-packs.md)
 - [Adapting the workflow](docs/adapting-the-workflow.md)
 - [Product roadmap](docs/product-roadmap.md)
+- [Model costing and token accounting](docs/model-costing.md)
 - [Verification status](docs/verification.md)
 - [Container security baseline](docs/security-baseline.md)
 - [Release checklist](docs/release-checklist.md)

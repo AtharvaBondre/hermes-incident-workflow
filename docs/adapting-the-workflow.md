@@ -23,6 +23,17 @@ Edit `config/workflow.json` to select the fixture repository contract, allowed s
 
 Policy is trusted operator input. Do not derive these values from incident text or model output.
 
+After editing policy, inspect the effective operator surface:
+
+```bash
+./scripts/run-local.sh dump-policy
+```
+
+Review the output before running a model. It is the compact product-facing view
+of what the controller will allow: repository, service, environment, paths,
+evidence caps, required test, Hermes profile, limits, delivery authority, and
+safety-mode pattern.
+
 For a customer pack, keep the public `config/workflow.json` as an example and
 store the real policy in the private pack. Do not publish repository names,
 internal evidence sources, channels, reviewers, or provider decisions unless the
@@ -46,6 +57,15 @@ A broker should accept a normalized query contract and return only bounded, reda
 - deterministic redaction and audit metadata.
 
 Do not let free-form model text become a database query, log query, shell command, or cloud API request.
+
+Implement each broker as a deterministic pipeline:
+
+```text
+request -> validate -> authorize -> execute -> redact -> record -> verify
+```
+
+The model should receive the redacted broker result, not the credential, raw
+query surface, or live client.
 
 ## Add a delivery adapter
 

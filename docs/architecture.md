@@ -79,3 +79,45 @@ stateDiagram-v2
 - Delivery sink: accept only an already verified digest and expose draft-only operations.
 
 Each extension must preserve the same authority boundary and artifact linkage.
+
+## Connector pipeline
+
+Customer connectors should follow the same deterministic pipeline before they
+are allowed to provide evidence or publish delivery artifacts:
+
+```text
+request -> validate -> authorize -> execute -> redact -> record -> verify
+```
+
+- **Validate:** reject unknown services, environments, views, labels, channels,
+  repositories, branches, and operations.
+- **Authorize:** select credentials from operator-owned policy, not from incident
+  text or model output.
+- **Execute:** perform only the narrow read or draft operation exposed by the
+  connector contract.
+- **Redact:** remove secrets, sensitive fields, and customer-specific markers
+  before data crosses into the candidate-provider boundary.
+- **Record:** write the bounded request, response summary, hashes, and cleanup
+  state into the run artifact directory.
+- **Verify:** bind delivery to the accepted candidate digest and reject
+  mismatched or unverified artifacts.
+
+This keeps live Grafana, database, source-control, and notification adapters as
+brokered policy extensions rather than direct model tools.
+
+## Safety-mode pattern
+
+The public repository currently runs in a synthetic draft mode: synthetic
+incidents, fixture evidence, local draft delivery, and no production connector.
+A private customer pack can map the same controller to stricter named modes:
+
+| Mode | Intended use | Connector authority |
+|---|---|---|
+| `synthetic` | Local development and demonstrations | Fixture evidence and mock delivery only |
+| `dry-run` | Customer-specific fixture validation | Private fixtures, no live systems |
+| `shadow-readonly` | Read-only live evidence qualification | Bounded evidence brokers, no delivery |
+| `live-evidence-readonly` | Pilot investigation with real evidence | Bounded evidence brokers and local artifacts |
+| `draft-pr-only` | Human-reviewed remediation proposal | Read-only evidence plus draft source-control and notification delivery |
+
+Merge, approval, deployment, production writes, and incident-state mutation stay
+outside every mode.

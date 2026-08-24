@@ -4,6 +4,10 @@
 - [ ] Confirm the project name and Hermes references comply with applicable trademark guidance.
 - [ ] Confirm no customer agreement, confidential architecture, or proprietary code is represented.
 - [ ] Run `python3 scripts/check-public-surface.py`.
+- [ ] Run `./scripts/run-local.sh dump-policy` and confirm the effective policy
+      exposes only generic placeholders and draft-only delivery.
+- [ ] Refresh `docs/model-costing.md` against provider pricing pages before any
+      customer-facing quote.
 - [ ] Run `./scripts/run-local.sh test` twice from a clean clone.
 - [ ] Run the event-indexing Docker scenario and `verify --latest`.
 - [ ] Confirm no run container, network, or volume remains.

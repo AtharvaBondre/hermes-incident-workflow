@@ -59,15 +59,32 @@ any live credential or connector exists.
 1. Copy the template into a private repository or private directory.
 2. Fill in `workflow.json` with the target repository, service, environment,
    path prefixes, test command, evidence caps, Hermes profile, and hard limits.
-3. Add a synthetic incident that resembles one real class of issue without using
+3. Inspect the resolved policy with `./scripts/run-local.sh dump-policy` and
+   confirm the repository, paths, evidence caps, test command, Hermes profile,
+   attempt limits, and delivery authority match the intended mode.
+4. Add a synthetic incident that resembles one real class of issue without using
    production data.
-4. Add visible repository tests and at least one controller-owned verifier.
-5. Run the deterministic fixture flow until success, failure, retry, timeout,
+5. Add visible repository tests and at least one controller-owned verifier.
+6. Run the deterministic fixture flow until success, failure, retry, timeout,
    and cleanup behavior are predictable.
-6. Add brokered evidence connectors behind fixed allowlists.
-7. Add draft-only delivery adapters.
-8. Run a real-model qualification on synthetic data.
-9. Complete the pilot readiness checklist before any live evidence is used.
+7. Add brokered evidence connectors behind fixed allowlists.
+8. Add draft-only delivery adapters.
+9. Run a real-model qualification on synthetic data.
+10. Complete the pilot readiness checklist before any live evidence is used.
+
+## Mode mapping
+
+A customer pack should state which operating mode it implements before any live
+connector is added:
+
+- `synthetic`: fixture-only development and demos.
+- `dry-run`: customer-specific fixtures with no live systems.
+- `shadow-readonly`: bounded live evidence reads, no delivery.
+- `live-evidence-readonly`: live evidence reads plus local artifact output.
+- `draft-pr-only`: live evidence reads plus digest-bound draft delivery.
+
+Do not infer the mode from incident text. The mode is operator-owned policy and
+should be visible in the policy review output.
 
 ## Non-negotiable boundaries
 

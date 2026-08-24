@@ -130,6 +130,40 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         ):
             runner.Candidate(tampered, patch_path)
 
+    def test_dump_policy_exposes_effective_controller_boundary(self) -> None:
+        policy = runner.dump_policy()
+
+        self.assertEqual(policy["schema_version"], 1)
+        self.assertEqual(policy["repository"]["id"], runner.EXPECTED_REPOSITORY)
+        self.assertEqual(
+            policy["repository"]["allowed_patch_prefixes"],
+            list(runner.ALLOWED_PATCH_PREFIXES),
+        )
+        self.assertEqual(policy["hermes"]["proposal_authority"], "reporting-only")
+        self.assertEqual(policy["delivery"]["mode"], "draft-artifacts-only")
+        self.assertFalse(policy["delivery"]["merge"])
+        self.assertFalse(policy["delivery"]["deployment"])
+        self.assertEqual(policy["authority_boundary"], "ai-proposes-controller-decides")
+
+    def test_dump_policy_cli_prints_valid_json(self) -> None:
+        result = subprocess.run(
+            ["bash", "-lc", "./scripts/run-local.sh dump-policy"],
+            cwd=runner.PACKAGE_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        policy = json.loads(result.stdout)
+        self.assertEqual(policy["safety_modes"]["current"], "synthetic-draft")
+        self.assertEqual(
+            policy["validation"]["candidate_code_execution"],
+            "network-disabled-pinned-docker-sandbox",
+        )
+
     def test_run_flow_uses_injected_candidate_provider(self) -> None:
         temporary, artifacts = self.artifact_root()
         self.addCleanup(temporary.cleanup)

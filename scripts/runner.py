@@ -2461,6 +2461,62 @@ def preflight(with_docker: bool, require_hermes: bool = False) -> dict[str, Any]
     }
 
 
+def dump_policy() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "policy_source": str(WORKFLOW_POLICY_PATH),
+        "package_root": str(PACKAGE_ROOT),
+        "repository": {
+            "id": EXPECTED_REPOSITORY,
+            "allowed_services": list(ALLOWED_SERVICES),
+            "allowed_environments": list(ALLOWED_ENVIRONMENTS),
+            "allowed_patch_prefixes": list(ALLOWED_PATCH_PREFIXES),
+        },
+        "evidence": {
+            "maximum_window_minutes": MAX_EVIDENCE_WINDOW_MINUTES,
+            "maximum_log_records": MAX_LOG_RECORDS,
+            "maximum_database_rows": MAX_DATABASE_ROWS,
+            "allowed_database_views": list(ALLOWED_DATABASE_VIEWS),
+            "connector_policy": "bounded-redacted-broker-output-only",
+        },
+        "validation": {
+            "required_test_argv": list(HERMES_REQUIRED_TEST_ARGV),
+            "required_test": HERMES_REQUIRED_TEST,
+            "candidate_code_execution": "network-disabled-pinned-docker-sandbox",
+            "clean_reapply_required": True,
+        },
+        "hermes": {
+            "profile": HERMES_PROFILE,
+            "skill": HERMES_SKILL,
+            "maximum_attempt_seconds": int(MAX_HERMES_ATTEMPT_SECONDS),
+            "proposal_authority": "reporting-only",
+        },
+        "limits": {
+            "hard_maximum_attempts": MAX_SEMANTIC_ATTEMPTS,
+            "hard_maximum_remediation_seconds": int(MAX_REMEDIATION_SECONDS),
+            "maximum_patch_bytes": MAX_HERMES_PATCH_BYTES,
+            "maximum_changed_paths": MAX_HERMES_CHANGED_PATHS,
+        },
+        "delivery": {
+            "mode": "draft-artifacts-only",
+            "merge": False,
+            "deployment": False,
+            "incident_state_mutation": False,
+        },
+        "safety_modes": {
+            "current": "synthetic-draft",
+            "available_pattern": [
+                "synthetic",
+                "dry-run",
+                "shadow-readonly",
+                "live-evidence-readonly",
+                "draft-pr-only",
+            ],
+        },
+        "authority_boundary": "ai-proposes-controller-decides",
+    }
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     subcommands = root.add_subparsers(dest="command", required=True)
@@ -2498,6 +2554,7 @@ def parser() -> argparse.ArgumentParser:
     cleanup_target.add_argument("--latest", action="store_true")
     cleanup_target.add_argument("--run-dir", type=Path)
 
+    subcommands.add_parser("dump-policy")
     subcommands.add_parser("test")
     return root
 
@@ -2542,6 +2599,9 @@ def main() -> int:
         result = cleanup_existing(run_dir)
         print(json.dumps({"run_dir": str(run_dir), **result}, indent=2, sort_keys=True))
         return 0 if result["cleanup_complete"] else 1
+    if args.command == "dump-policy":
+        print(json.dumps(dump_policy(), indent=2, sort_keys=True))
+        return 0
     if args.command == "test":
         suite = unittest.defaultTestLoader.discover(str(PACKAGE_ROOT / "tests"))
         result = unittest.TextTestRunner(verbosity=2).run(suite)
