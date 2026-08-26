@@ -53,6 +53,18 @@ class HermesCandidateProviderTests(unittest.TestCase):
         run_dir = artifact_root / "hermes-run"
         run_dir.mkdir()
         patch_name = "attempt-1-hermes.patch"
+        trusted_test = {
+            "passed": True,
+            "checks": [
+                {
+                    "exit_code": 0,
+                    "process_exit_code": 0,
+                    "passed": True,
+                    "trusted_verifier_completed": True,
+                    "output": runner.TRUSTED_VERIFIER_COMPLETION + "\n",
+                }
+            ],
+        }
         (run_dir / patch_name).write_bytes(patch_payload)
         runner.write_json(
             run_dir / "control.json",
@@ -99,7 +111,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             {
                 "attempt": 1,
                 "candidate_digest": candidate_digest,
-                "test": {"passed": True},
+                "test": trusted_test,
             },
         )
         runner.write_json(
@@ -108,7 +120,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "accepted": True,
                 "candidate_digest": candidate_digest,
                 "tested_digest": candidate_digest,
-                "test": {"passed": True},
+                "test": trusted_test,
             },
         )
         runner.write_json(
@@ -753,6 +765,104 @@ class HermesCandidateProviderTests(unittest.TestCase):
             max_turns=20,
         )
         self.assertIs(run_flow.call_args.kwargs["candidate_provider"], provider)
+
+    def test_preflight_checks_the_selected_hermes_profile(self) -> None:
+        def command(args, **_):
+            if args == ["hermes", "--version"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n",
+                    "",
+                )
+            if args == ["hermes", "profile", "info", "example-profile"]:
+                return subprocess.CompletedProcess(args, 0, "profile available\n", "")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with (
+            mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(runner, "command", side_effect=command),
+        ):
+            result = runner.preflight(False, True, "example-profile")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["hermes_profile"],
+            {"name": "example-profile", "status": "available"},
+        )
+
+    def test_preflight_reports_a_missing_hermes_profile(self) -> None:
+        def command(args, **_):
+            return subprocess.CompletedProcess(
+                args,
+                0 if args == ["hermes", "--version"] else 1,
+                (
+                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n"
+                    if "--version" in args
+                    else ""
+                ),
+                "",
+            )
+
+        with (
+            mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(runner, "command", side_effect=command),
+        ):
+            result = runner.preflight(False, True, "missing-profile")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["hermes_profile"]["status"], "missing")
+        self.assertTrue(any("install-hermes-profile.sh" in item for item in result["problems"]))
+
+    def test_preflight_rejects_unqualified_hermes_revision(self) -> None:
+        def command(args, **_):
+            if args == ["hermes", "--version"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    "Hermes Agent v0.19.1 (test) · upstream deadbeef\n",
+                    "",
+                )
+            if args == ["hermes", "profile", "info", "example-profile"]:
+                return subprocess.CompletedProcess(args, 0, "profile available\n", "")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with (
+            mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(runner, "command", side_effect=command),
+        ):
+            result = runner.preflight(False, True, "example-profile")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            any("qualified upstream revision 26e0b1c1" in item for item in result["problems"])
+        )
+
+    def test_preflight_rejects_failed_hermes_version_command(self) -> None:
+        def command(args, **_):
+            if args == ["hermes", "--version"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    1,
+                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n",
+                    "version lookup failed",
+                )
+            if args == ["hermes", "profile", "info", "example-profile"]:
+                return subprocess.CompletedProcess(args, 0, "profile available\n", "")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with (
+            mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(runner, "command", side_effect=command),
+        ):
+            result = runner.preflight(False, True, "example-profile")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("Hermes version command failed", result["problems"])
 
 
 if __name__ == "__main__":

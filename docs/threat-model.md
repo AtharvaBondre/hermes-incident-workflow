@@ -17,9 +17,9 @@
 | Agent expands scope | Trusted policy fixes repository, path prefixes, tests, attempts, and deadline. |
 | Agent accesses host secrets | Terminal tools run in Docker; forwarded environment is empty; inputs are read-only. |
 | Agent exfiltrates through the terminal | Docker network mode is `none`; web, browser, MCP, memory, and delegation toolsets are disabled. |
-| Agent changes its own tests | Controller-owned verification lives outside the writable repository. |
+| Agent changes its own tests | A required verifier lives outside the writable repository, keeps assertions in a parent process, and treats the candidate child response as untrusted data. |
 | Candidate code executes on the controller host | Repository and controller-owned Python gates execute only in a pinned, network-disabled, non-root Docker sandbox with read-only inputs and bounded resources. |
-| Model claims false success | Host derives the patch and runs deterministic gates; proposal text is non-authoritative. |
+| Model or candidate claims false success | Host derives the patch; a trusted verifier parent validates behavior and emits the completion marker; proposal text, candidate output, and candidate exit status are non-authoritative. |
 | Candidate uses links, binary content, mode changes, or oversized output | Host workspace and patch policy reject them. |
 | Different code is delivered than tested | Patch SHA and candidate-tree digest are bound through test, verification, and delivery artifacts. |
 | Duplicate or stale retry context | Every semantic attempt gets a fresh session and bounded redacted feedback. |
@@ -29,7 +29,9 @@
 
 ## Residual risk
 
-- The host inference process necessarily contacts the selected model provider and sends the supplied prompt context.
+- The host inference process must be able to contact the selected model provider
+  and sends the supplied prompt context; this project does not enforce or
+  allowlist host egress.
 - Local artifacts are hash-linked but are not signed, immutable, or remotely attested.
 - Denylist redaction is not comprehensive data-loss prevention.
 - Docker Desktop resource controls and filesystem isolation are not equivalent to a dedicated hardened worker host.

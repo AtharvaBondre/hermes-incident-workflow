@@ -8,7 +8,6 @@ indexes/query-checks the resulting record state in OpenSearch.
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import socket
@@ -19,15 +18,22 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 import psycopg
 from kafka import KafkaAdminClient, KafkaConsumer, KafkaProducer
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 
+try:
+    from candidate_probe import run_candidate_calls
+except ModuleNotFoundError:  # Support direct imports from the repository test suite.
+    from verifiers.candidate_probe import run_candidate_calls
+
 
 SCHEMA_VERSION = "1.0"
+EVENT_FACTORY = {"module": "app.events", "callable": "RecordEvent.from_mapping"}
 
 
 @dataclass(frozen=True)
@@ -61,29 +67,6 @@ def load_settings() -> Settings:
     )
 
 
-def candidate_functions(candidate_root: str) -> tuple[Callable[[dict[str, Any]], str], Callable[[dict[str, Any]], str]]:
-    sys.path.insert(0, candidate_root)
-    try:
-        event_type = importlib.import_module("app.events").RecordEvent
-        event_identity = importlib.import_module("app.idempotency").event_identity
-        document_identity = importlib.import_module("app.search_documents").document_identity
-    except (ImportError, AttributeError) as exc:
-        raise AssertionError(
-            "candidate must expose RecordEvent, event_identity(event), and "
-            "document_identity(event)"
-        ) from exc
-    if not callable(event_type) or not callable(event_identity) or not callable(document_identity):
-        raise AssertionError("candidate identity API attributes must be callable")
-
-    def event_key(value: dict[str, Any]) -> str:
-        return event_identity(event_type.from_mapping(value))
-
-    def document_id(value: dict[str, Any]) -> str:
-        return document_identity(event_type.from_mapping(value))
-
-    return event_key, document_id
-
-
 def record_events() -> list[dict[str, Any]]:
     original = {
         "event_type": "record.ready",
@@ -110,25 +93,48 @@ def record_events() -> list[dict[str, Any]]:
     return [original, replay, new_revision, cross_tenant]
 
 
-def checked_identity(name: str, function: Callable[[dict[str, Any]], str], event: dict[str, Any]) -> str:
-    first = function(dict(event))
-    second = function(dict(event))
-    if not isinstance(first, str) or not first.strip():
-        raise AssertionError(f"{name} must return a non-empty string")
-    if len(first.encode("utf-8")) > 512:
-        raise AssertionError(f"{name} must be at most 512 UTF-8 bytes")
-    if first != second:
-        raise AssertionError(f"{name} must be deterministic")
-    return first
-
-
-def verify_candidate_semantics(
-    event_key: Callable[[dict[str, Any]], str],
-    document_id: Callable[[dict[str, Any]], str],
+def candidate_identities(
+    candidate_root: str,
     events: list[dict[str, Any]],
+    timeout_seconds: float,
 ) -> dict[str, list[str]]:
-    event_keys = [checked_identity("event_key", event_key, event) for event in events]
-    document_ids = [checked_identity("document_id", document_id, event) for event in events]
+    def calls(module: str, callable_name: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "module": module,
+                "callable": callable_name,
+                "factory": EVENT_FACTORY,
+                "argument": event,
+            }
+            for event in events
+            for _repeat in range(2)
+        ]
+
+    results = run_candidate_calls(
+        Path(candidate_root),
+        [
+            *calls("app.idempotency", "event_identity"),
+            *calls("app.search_documents", "document_identity"),
+        ],
+        timeout_seconds=timeout_seconds,
+    )
+    split = len(events) * 2
+
+    def checked_pairs(name: str, values: list[Any]) -> list[str]:
+        checked: list[str] = []
+        for index in range(len(events)):
+            first, second = values[index * 2 : index * 2 + 2]
+            if not isinstance(first, str) or not first.strip():
+                raise AssertionError(f"{name} must return a non-empty string")
+            if len(first.encode("utf-8")) > 512:
+                raise AssertionError(f"{name} must be at most 512 UTF-8 bytes")
+            if first != second:
+                raise AssertionError(f"{name} must be deterministic")
+            checked.append(first)
+        return checked
+
+    event_keys = checked_pairs("event_key", results[:split])
+    document_ids = checked_pairs("document_id", results[split:])
 
     if event_keys[0] != event_keys[1]:
         raise AssertionError("an exact replay must retain the same event key")
@@ -149,6 +155,10 @@ def verify_candidate_semantics(
         raise AssertionError("the four-event scenario must produce exactly two document IDs")
 
     return {"event_keys": event_keys, "document_ids": document_ids}
+
+
+def event_fingerprint(event: dict[str, Any]) -> str:
+    return json.dumps(event, separators=(",", ":"), sort_keys=True)
 
 
 def pg_dsn(settings: Settings, *, user: str, password: str) -> str:
@@ -436,9 +446,20 @@ def run() -> dict[str, Any]:
     deadline = time.monotonic() + settings.timeout_seconds
     wait_for_dns(settings, deadline)
 
-    event_key, document_id = candidate_functions(settings.candidate_root)
     events = record_events()
-    identities = verify_candidate_semantics(event_key, document_id, events)
+    probe_timeout = min(10.0, max(0.1, deadline - time.monotonic()))
+    identities = candidate_identities(
+        settings.candidate_root,
+        events,
+        probe_timeout,
+    )
+    identity_by_event = {
+        event_fingerprint(event): (
+            identities["event_keys"][index],
+            identities["document_ids"][index],
+        )
+        for index, event in enumerate(events)
+    }
     evidence = verify_read_only_evidence(settings)
 
     run_id = uuid.uuid4().hex[:12]
@@ -455,8 +476,10 @@ def run() -> dict[str, Any]:
         reset_disposable_ledger(app_connection)
         for record in records:
             event = record.value
-            key = checked_identity("event_key", event_key, event)
-            doc_id = checked_identity("document_id", document_id, event)
+            try:
+                key, doc_id = identity_by_event[event_fingerprint(event)]
+            except KeyError as exc:
+                raise AssertionError("Kafka returned an unexpected candidate event") from exc
             insert_results.append(record_idempotency(app_connection, key, record))
             index_event(settings.opensearch_url, index, doc_id, key, event)
         ledger = verify_ledger(app_connection)
@@ -469,6 +492,7 @@ def run() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "status": "passed",
         "scope": "synthetic record incident; internal disposable services only",
+        "trusted_candidate_probe_completed": True,
         "services": {
             "postgres": {"evidence_rows": len(evidence), "ledger_entries": len(ledger), "reader_update_rejected": True},
             "kafka": {"topic": topic, "published": len(events), "consumed": len(records)},

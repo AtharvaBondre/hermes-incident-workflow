@@ -38,6 +38,53 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         )
         self.assertNotIn("merge", github["operations"])
 
+    def test_clean_candidate_exit_cannot_reach_delivery(self) -> None:
+        temporary, artifacts = self.artifact_root()
+        self.addCleanup(temporary.cleanup)
+        patch_path = artifacts / "early-exit.patch"
+        patch_path.write_text(
+            """diff --git a/app/subject.py b/app/subject.py
+--- a/app/subject.py
++++ b/app/subject.py
+@@ -1,3 +1,3 @@
+-def normalize_subject(value: str) -> str:
+-    \"\"\"Return the stable subject form used for matching.\"\"\"
+-    return value.strip()
++import os
++
++os._exit(0)
+""",
+            encoding="utf-8",
+        )
+        provider = runner.FixtureCandidateProvider(
+            [patch_path],
+            repeat_last_patch=False,
+        )
+
+        with self.assertRaisesRegex(
+            runner.FlowError,
+            "expected SUCCEEDED, got FAILED",
+        ):
+            runner.run_flow(
+                "retry-success",
+                max_attempts=1,
+                artifact_root=artifacts,
+                candidate_provider=provider,
+            )
+
+        run_dirs = [path for path in artifacts.iterdir() if path.is_dir()]
+        self.assertEqual(len(run_dirs), 1)
+        run_dir = run_dirs[0]
+        control = runner.read_json(run_dir / "control.json")
+        result = runner.read_json(run_dir / "attempt-1-result.json")
+        self.assertEqual(control["outcome"], "FAILED")
+        self.assertTrue(result["test"]["checks"][0]["passed"])
+        self.assertFalse(result["test"]["checks"][1]["passed"])
+        self.assertFalse(
+            result["test"]["checks"][1]["trusted_verifier_completed"]
+        )
+        self.assertFalse((run_dir / "mock-github.json").exists())
+
     def test_five_failures_do_not_publish(self) -> None:
         temporary, artifacts = self.artifact_root()
         self.addCleanup(temporary.cleanup)
@@ -212,6 +259,20 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         ):
             runner.Candidate(record, runner.FIXTURES / "patches/correct.patch")
 
+    def test_scenario_path_policy_rejects_an_unverified_module(self) -> None:
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
+            "event-indexing-collision"
+        ]
+
+        with self.assertRaisesRegex(
+            runner.PolicyDenied,
+            "outside the scenario policy",
+        ):
+            runner.validate_scenario_candidate_paths(
+                scenario,
+                ["app/consumer.py"],
+            )
+
     def test_wrong_repository_and_patch_path_are_denied(self) -> None:
         incident = runner.read_json(runner.FIXTURES / "incidents/retry-success.json")
         incident["repository"] = "Hermes Incident Workflow/another-repository"
@@ -328,12 +389,16 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         self.assertEqual(result["output"], "sandbox unit output")
         self.assertEqual(result["cleanup"], cleanup_result)
 
-    def test_controller_test_adds_only_read_only_verifier_mount(self) -> None:
+    def test_controller_test_adds_read_only_trusted_verifier_mounts(self) -> None:
         temporary, artifacts = self.artifact_root()
         self.addCleanup(temporary.cleanup)
         workspace = runner.create_workspace(artifacts, "controller-sandbox")
         verifier = runner.PACKAGE_ROOT / "verifiers" / "event_indexing_logic.py"
-        completed = subprocess.CompletedProcess([], 0, "sandbox verifier output")
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            f"sandbox verifier output\n{runner.TRUSTED_VERIFIER_COMPLETION}\n",
+        )
         sandbox_id = "1" * 32
         container_name = f"hiw-candidate-test-{sandbox_id}"
         cleanup_result = {"complete": True, "removed": False}
@@ -378,6 +443,11 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             "--cpus=0.5",
             f"--mount=type=bind,src={workspace.resolve()},dst=/workspace,readonly",
             f"--mount=type=bind,src={verifier.resolve()},dst=/verifier/controller.py,readonly",
+            (
+                "--mount=type=bind,"
+                f"src={runner.CANDIDATE_PROBE_PATH.resolve()},"
+                "dst=/verifier/candidate_probe.py,readonly"
+            ),
             "--workdir=/workspace",
             "--entrypoint=/usr/bin/env",
             (
@@ -408,8 +478,52 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertTrue(result["passed"])
-        self.assertEqual(result["output"], "sandbox verifier output")
+        self.assertTrue(result["trusted_verifier_completed"])
+        self.assertEqual(
+            result["output"],
+            f"sandbox verifier output\n{runner.TRUSTED_VERIFIER_COMPLETION}\n",
+        )
         self.assertEqual(result["cleanup"], cleanup_result)
+
+    def test_missing_controller_verifier_fails_closed(self) -> None:
+        temporary, artifacts = self.artifact_root()
+        self.addCleanup(temporary.cleanup)
+        workspace = runner.create_workspace(artifacts, "missing-verifier")
+
+        result = runner.controller_test(
+            workspace,
+            None,
+            time.monotonic() + 10,
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["trusted_verifier_completed"])
+        self.assertEqual(result["exit_code"], 1)
+
+    def test_zero_exit_without_trusted_completion_marker_fails_closed(self) -> None:
+        temporary, artifacts = self.artifact_root()
+        self.addCleanup(temporary.cleanup)
+        workspace = runner.create_workspace(artifacts, "missing-completion-marker")
+        verifier = runner.PACKAGE_ROOT / "verifiers" / "subject_logic.py"
+
+        with mock.patch.object(
+            runner,
+            "_run_candidate_test_container",
+            return_value=(
+                subprocess.CompletedProcess([], 0, "candidate says passed\n"),
+                {"complete": True, "removed": False},
+            ),
+        ):
+            result = runner.controller_test(
+                workspace,
+                verifier,
+                time.monotonic() + 10,
+            )
+
+        self.assertEqual(result["process_exit_code"], 0)
+        self.assertEqual(result["exit_code"], 1)
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["trusted_verifier_completed"])
 
     def test_candidate_test_timeout_always_runs_scoped_cleanup(self) -> None:
         temporary, artifacts = self.artifact_root()
@@ -542,6 +656,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             runner.FIXTURES / "patches/correct.patch",
             "0" * 64,
             time.monotonic() + 10,
+            verifier=runner.PACKAGE_ROOT / "verifiers" / "subject_logic.py",
         )
 
         self.assertTrue(verification["test"]["passed"])
@@ -573,6 +688,27 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         self.assertIn("mock pull request is not a draft", issues)
         self.assertIn("published digest does not match accepted digest", issues)
         self.assertIn("sensitive marker retained in unsafe-retained.txt", issues)
+
+    def test_fixture_verifier_requires_trusted_completion_artifacts(self) -> None:
+        temporary, artifacts = self.artifact_root()
+        self.addCleanup(temporary.cleanup)
+        run_dir, control = runner.run_flow("retry-success", artifact_root=artifacts)
+        result_path = run_dir / f"attempt-{control['attempts']}-result.json"
+        result = runner.read_json(result_path)
+        trusted = next(
+            check
+            for check in result["test"]["checks"]
+            if "trusted_verifier_completed" in check
+        )
+        trusted["trusted_verifier_completed"] = False
+        runner.write_json(result_path, result)
+
+        issues = runner.verify_run(run_dir)
+
+        self.assertIn("accepted result lacks trusted verifier completion", issues)
+        (run_dir / "verification.json").unlink()
+        issues = runner.verify_run(run_dir)
+        self.assertIn("successful run is missing verification artifact", issues)
 
     def test_cleanup_is_idempotent(self) -> None:
         temporary, artifacts = self.artifact_root()

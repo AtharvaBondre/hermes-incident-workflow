@@ -34,11 +34,34 @@ The Hermes process runs on the host because inference requires network access. I
 
 The host computes the patch from an external Git baseline. It rejects path escape, forbidden path prefixes, irregular files, links, cache files, binary patches, unsupported mode changes, excessive file count, excessive bytes, workflow edits, and selected restricted-content markers.
 
+Each synthetic scenario further lists the exact application files its verifier
+covers. A candidate that changes another globally allowed file is rejected
+before execution, so an unverified module cannot bypass acceptance by exiting
+its repository test process.
+
 The model's proposal is reporting data. It is never the authoritative patch or acceptance result.
 
 ### 5. Verification
 
-The controller runs repository tests and an optional verifier stored outside the editable repository in a pinned Python 3.12 Alpine container. Both gates use a read-only root, read-only candidate and verifier mounts, no network, a non-root user, an exact environment allowlist, a private tmpfs, dropped capabilities, no-new-privileges, and bounded CPU, memory, and process counts. A controller-private CID file and unique ownership label scope forced cleanup if the Docker client times out. The optional service example mounts the candidate read-only and exercises disposable PostgreSQL, Kafka, and OpenSearch services.
+The controller runs repository tests and a required verifier stored outside the
+editable repository in a pinned Python 3.12 Alpine container. Both gates use a
+read-only root, read-only candidate and verifier mounts, no network, a non-root
+user, an exact environment allowlist, a private tmpfs, dropped capabilities,
+no-new-privileges, and bounded CPU, memory, and process counts. A
+controller-private CID file and unique ownership label scope forced cleanup if
+the Docker client times out.
+
+The trusted verifier parent never imports candidate modules. It sends a bounded
+request to a trusted supervisor, which runs candidate imports and calls in a
+subordinate executor. The executor receives neither the supervisor's nonce nor
+its completion channel. The supervisor treats candidate output only as return
+values and emits a nonce-bound response after the executor terminates; the
+verifier parent then checks those values itself. A clean candidate exit,
+candidate-written success text, crash, malformed response, or timeout cannot
+produce the parent-only completion marker. The runner requires both a zero
+verifier exit and that unique terminal marker; a missing verifier fails closed.
+The service example uses the same process boundary before exercising disposable
+PostgreSQL, Kafka, and OpenSearch services.
 
 After acceptance, a separate verifier reapplies the retained patch to a clean baseline and requires the same candidate digest and tests.
 
@@ -73,7 +96,8 @@ stateDiagram-v2
 
 - `CandidateProvider`: produce a candidate without accepting it.
 - Scenario repository and patch fixtures: model application behavior.
-- Controller verifier: keep hidden acceptance logic outside the candidate workspace.
+- Controller verifier: keep acceptance assertions and completion evidence outside
+  the candidate process as well as outside its writable workspace.
 - Compose verifier: exercise application-specific disposable services.
 - Evidence broker: return normalized, bounded, redacted evidence.
 - Delivery sink: accept only an already verified digest and expose draft-only operations.

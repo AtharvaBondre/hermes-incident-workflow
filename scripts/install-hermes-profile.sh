@@ -31,8 +31,9 @@ if [[ "${installed_hermes_version}" != "${required_hermes_version}" ]]; then
 fi
 
 if [[ "${hermes_version_line}" != *"upstream ${qualified_hermes_revision}"* ]]; then
-  printf 'Warning: this v%s build is not the locally qualified upstream revision %s.\n' \
+  printf 'Hermes v%s must report qualified upstream revision %s.\n' \
     "${required_hermes_version}" "${qualified_hermes_revision}" >&2
+  exit 1
 fi
 
 exec hermes profile install "${profile_source}" \

@@ -121,6 +121,7 @@ services:
     volumes:
       - ${HIW_INCIDENT_CANDIDATE:?set HIW_INCIDENT_CANDIDATE to a candidate workspace}:/candidate:ro
       - ./integration/event_indexing_verifier.py:/verifier/event_indexing_verifier.py:ro
+      - ./verifiers/candidate_probe.py:/verifier/candidate_probe.py:ro
     networks: [incident]
     read_only: true
     tmpfs: ["/tmp:size=32m,noexec,nosuid,nodev"]

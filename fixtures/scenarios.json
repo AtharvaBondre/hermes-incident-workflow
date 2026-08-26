@@ -1,12 +1,16 @@
 {
   "retry-success": {
     "incident": "incidents/retry-success.json",
+    "controller_verifier": "verifiers/subject_logic.py",
+    "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/incomplete.patch", "patches/correct.patch"],
     "repeat_last_patch": false,
     "expected_outcome": "SUCCEEDED"
   },
   "exhausted": {
     "incident": "incidents/exhausted.json",
+    "controller_verifier": "verifiers/subject_logic.py",
+    "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/incomplete.patch"],
     "repeat_last_patch": true,
     "expected_outcome": "FAILED"
@@ -19,6 +23,8 @@
   },
   "timeout": {
     "incident": "incidents/retry-success.json",
+    "controller_verifier": "verifiers/subject_logic.py",
+    "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/correct.patch"],
     "repeat_last_patch": false,
     "simulate_delay_seconds": 0.02,
@@ -31,6 +37,10 @@
     "execution_plan": "execution-plans/event-indexing-collision.json",
     "repository": "repositories/event-indexing-collision",
     "controller_verifier": "verifiers/event_indexing_logic.py",
+    "allowed_changed_paths": [
+      "app/idempotency.py",
+      "app/search_documents.py"
+    ],
     "compose_file": "compose.event-indexing.yaml",
     "compose_service": "verifier",
     "compose_environment": "incident",

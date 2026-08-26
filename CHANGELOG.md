@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added public, profile-scoped Hermes model and credential setup guidance plus
+  a no-request preflight check for the selected workflow profile.
+- Removed dated continuation and internal roadmap documents from the public
+  tree and added a public-surface regression guard for them.
+
 ## 0.1.0 - 2026-08-18
 
 - Added a policy-controlled local remediation controller.

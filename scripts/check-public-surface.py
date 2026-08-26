@@ -13,6 +13,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKIP_PARTS = {".git", ".venv", "artifacts", "__pycache__", "dist", "build"}
+FORBIDDEN_INTERNAL_PATHS = {
+    "docs/implementation-plan.md",
+    "docs/product-roadmap.md",
+}
+FORBIDDEN_INTERNAL_PARTS = {".kybernetes"}
+FORBIDDEN_INTERNAL_NAMES = (
+    re.compile(r"^continuation-handoff(?:-[^.]+)?\.md$"),
+    re.compile(r"^[A-Za-z0-9_-]+-research-[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$"),
+)
 REQUIRED = {
     "README.md",
     "LICENSE",
@@ -24,6 +33,7 @@ REQUIRED = {
     "hermes-profile/distribution.yaml",
     "hermes-profile/config.yaml",
     "hermes-profile/skills/hermes-incident-remediation/SKILL.md",
+    "docs/model-setup.md",
     "schemas/workflow.schema.json",
     "security/image-vulnerability-baseline.json",
     "scripts/check-image-vulnerabilities.py",
@@ -62,6 +72,14 @@ def main() -> int:
     present = {path.relative_to(ROOT).as_posix() for path in source_files()}
     for missing in sorted(REQUIRED - present):
         issues.append(f"missing required public file: {missing}")
+    for relative in sorted(present):
+        path = Path(relative)
+        if (
+            relative in FORBIDDEN_INTERNAL_PATHS
+            or any(part in FORBIDDEN_INTERNAL_PARTS for part in path.parts)
+            or any(pattern.fullmatch(path.name) for pattern in FORBIDDEN_INTERNAL_NAMES)
+        ):
+            issues.append(f"internal coordination file is in the public tree: {relative}")
 
     secret_patterns = (
         re.compile(r"AKIA[0-9A-Z]{16}"),

@@ -14,4 +14,12 @@ Contributions that improve deterministic policy, isolation, verification, portab
 
 Do not add automatic merge, approval, deployment, production-write, or incident-mutation operations. Proposals for live connectors must begin with a threat model and a brokered least-privilege interface.
 
+## Public repository hygiene
+
+Commit only material intended for users, contributors, security review, or
+release verification. Keep continuation handoffs, phase plans, raw research
+workpads, reviewer notes, orchestration state, generated artifacts, sessions,
+credentials, and private adaptations outside the repository. The public-surface
+check rejects known internal coordination paths and common disclosure patterns.
+
 By submitting a contribution, you agree that it is licensed under Apache-2.0 and that you have the right to contribute it.

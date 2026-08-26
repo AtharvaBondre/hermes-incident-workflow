@@ -10,7 +10,10 @@ generic documentation.
 1. Add a minimal buggy repository under `fixtures/repositories/<scenario>/`.
 2. Add visible tests inside that repository.
 3. Add a normalized incident and evidence packet under `fixtures/`.
-4. Add a controller-owned verifier under `verifiers/` when visible tests are insufficient.
+4. Add a required controller-owned verifier under `verifiers/`. Use
+   `candidate_probe.py` so candidate imports and calls remain in a subordinate
+   executor behind its trusted supervisor; keep assertions and the completion
+   marker in the trusted verifier parent.
 5. Add reviewed fixture patches for deterministic success and failure paths.
 6. Register the scenario in `fixtures/scenarios.json`.
 7. Run it without a model before enabling the Hermes provider.

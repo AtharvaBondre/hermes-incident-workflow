@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Controller-owned acceptance verifier for the record identity fixture.
-
-This verifier intentionally lives outside the editable fixture repository. It
-checks behavior without importing or trusting the repository's visible tests.
-"""
+"""Controller-owned acceptance verifier for the record-identity fixture."""
 
 from __future__ import annotations
 
 import argparse
-import importlib
+import secrets
 import sys
-import unittest
-from dataclasses import replace
 from pathlib import Path
+from typing import Any
+
+try:
+    from candidate_probe import TRUSTED_VERIFIER_COMPLETION, run_candidate_calls
+except ModuleNotFoundError:  # Support direct imports from the repository test suite.
+    from verifiers.candidate_probe import (
+        TRUSTED_VERIFIER_COMPLETION,
+        run_candidate_calls,
+    )
 
 
 DEFAULT_REPOSITORY = (
@@ -21,101 +24,124 @@ DEFAULT_REPOSITORY = (
     / "repositories"
     / "event-indexing-collision"
 )
+EVENT_FACTORY = {"module": "app.events", "callable": "RecordEvent.from_mapping"}
 
 
-def load_fixture(repository: Path):
-    repository = repository.resolve()
-    if not (repository / "app").is_dir():
-        raise ValueError(f"fixture repository has no app package: {repository}")
+def record_events() -> list[dict[str, Any]]:
+    suffix = secrets.token_hex(8)
+    base = {
+        "event_type": "record.ready",
+        "tenant_id": f"org-{suffix}",
+        "provider": "source-a",
+        "external_record_id": f"record-{suffix}",
+        "revision": 7,
+    }
+    return [
+        base,
+        dict(base),
+        {**base, "tenant_id": f"org-other-{suffix}"},
+        {**base, "revision": 8},
+        {**base, "event_type": "record.redacted"},
+        {**base, "provider": "source-b"},
+    ]
 
-    for name in tuple(sys.modules):
-        if name == "app" or name.startswith("app."):
-            sys.modules.pop(name, None)
-    sys.path.insert(0, str(repository))
 
-    events = importlib.import_module("app.events")
-    idempotency = importlib.import_module("app.idempotency")
-    search_documents = importlib.import_module("app.search_documents")
-    consumer = importlib.import_module("app.consumer")
-    return events, idempotency, search_documents, consumer
+def _calls(
+    module: str,
+    callable_name: str,
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "module": module,
+            "callable": callable_name,
+            "factory": EVENT_FACTORY,
+            "argument": event,
+        }
+        for event in events
+        for _repeat in range(2)
+    ]
 
 
-def build_suite(repository: Path) -> unittest.TestSuite:
-    events, idempotency, search_documents, consumer = load_fixture(repository)
-    RecordEvent = events.RecordEvent
-    event_identity = idempotency.event_identity
-    document_identity = search_documents.document_identity
+def _validated_pairs(name: str, values: list[Any], expected: int) -> list[str]:
+    if len(values) != expected * 2:
+        raise AssertionError(f"{name} returned the wrong result count")
+    checked: list[str] = []
+    for index in range(expected):
+        first, second = values[index * 2 : index * 2 + 2]
+        if not isinstance(first, str) or not first.strip():
+            raise AssertionError(f"{name} must return a non-empty string")
+        if len(first.encode("utf-8")) > 512:
+            raise AssertionError(f"{name} must be at most 512 UTF-8 bytes")
+        if first != second:
+            raise AssertionError(f"{name} must be deterministic")
+        checked.append(first)
+    return checked
 
-    class ControllerOwnedIdentityVerification(unittest.TestCase):
-        def setUp(self) -> None:
-            self.base = RecordEvent("org-alpha", "source-a", "shared-42", 7)
 
-        def test_event_identity_contract(self) -> None:
-            self.assertEqual(event_identity(self.base), event_identity(replace(self.base)))
-            self.assertNotEqual(
-                event_identity(self.base),
-                event_identity(replace(self.base, tenant_id="org-beta")),
-            )
-            self.assertNotEqual(
-                event_identity(self.base),
-                event_identity(replace(self.base, revision=8)),
-            )
-            self.assertNotEqual(
-                event_identity(self.base),
-                event_identity(replace(self.base, event_type="record.redacted")),
-            )
-            self.assertNotEqual(
-                event_identity(self.base),
-                event_identity(replace(self.base, provider="teams")),
-            )
-
-        def test_document_identity_contract(self) -> None:
-            self.assertNotEqual(
-                document_identity(self.base),
-                document_identity(replace(self.base, tenant_id="org-beta")),
-            )
-            self.assertEqual(
-                document_identity(self.base),
-                document_identity(replace(self.base, revision=8)),
-            )
-            self.assertEqual(
-                document_identity(self.base),
-                document_identity(replace(self.base, event_type="record.redacted")),
-            )
-            self.assertNotEqual(
-                document_identity(self.base),
-                document_identity(replace(self.base, provider="teams")),
-            )
-
-        def test_end_to_end_processing_contract(self) -> None:
-            ledger = consumer.InMemoryEventLedger()
-            search = consumer.InMemorySearchIndex()
-            processor = consumer.RecordConsumer(ledger, search)
-            gold = replace(self.base, tenant_id="org-beta")
-            newer_blue = replace(self.base, revision=8)
-
-            outcomes = processor.process_all([self.base, gold, self.base, newer_blue])
-
-            self.assertEqual(outcomes, ["indexed", "indexed", "duplicate", "indexed"])
-            self.assertEqual(len(ledger), 3)
-            self.assertEqual(len(search.documents), 2)
-            revisions = {
-                str(document["tenant_id"]): document["revision"]
-                for document in search.documents.values()
-            }
-            self.assertEqual(revisions, {"org-alpha": 8, "org-beta": 7})
-
-    return unittest.defaultTestLoader.loadTestsFromTestCase(
-        ControllerOwnedIdentityVerification
+def verify_repository(repository: Path) -> None:
+    events = record_events()
+    results = run_candidate_calls(
+        repository,
+        [
+            *_calls("app.idempotency", "event_identity", events),
+            *_calls("app.search_documents", "document_identity", events),
+        ],
+        timeout_seconds=5,
     )
+    split = len(events) * 2
+    event_keys = _validated_pairs("event_identity", results[:split], len(events))
+    document_ids = _validated_pairs(
+        "document_identity", results[split:], len(events)
+    )
+
+    if event_keys[0] != event_keys[1]:
+        raise AssertionError("an exact replay must retain the same event key")
+    if len(set(event_keys)) != 5:
+        raise AssertionError(
+            "tenant, revision, event type, and provider must contribute to event identity"
+        )
+    if not all(event_keys[0] != event_keys[index] for index in range(2, 6)):
+        raise AssertionError("distinct event dimensions must receive distinct event keys")
+
+    if len({document_ids[index] for index in (0, 1, 3, 4)}) != 1:
+        raise AssertionError("revision and event type must retain document identity")
+    if document_ids[0] in {document_ids[2], document_ids[5]}:
+        raise AssertionError("tenant and provider must contribute to document identity")
+    if len(set(document_ids)) != 3:
+        raise AssertionError("the controller cases must produce three document IDs")
+
+    ledger: set[str] = set()
+    documents: dict[str, dict[str, Any]] = {}
+    outcomes: list[str] = []
+    for index in (0, 2, 1, 3):
+        key = event_keys[index]
+        if key in ledger:
+            outcomes.append("duplicate")
+            continue
+        ledger.add(key)
+        documents[document_ids[index]] = events[index]
+        outcomes.append("indexed")
+    if outcomes != ["indexed", "indexed", "duplicate", "indexed"]:
+        raise AssertionError("trusted in-memory processing produced unexpected outcomes")
+    if len(ledger) != 3 or len(documents) != 2:
+        raise AssertionError("trusted ledger or document cardinality is incorrect")
+    revisions = {event["tenant_id"]: event["revision"] for event in documents.values()}
+    if revisions != {events[0]["tenant_id"]: 8, events[2]["tenant_id"]: 7}:
+        raise AssertionError("trusted document replacement behavior is incorrect")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", type=Path, default=DEFAULT_REPOSITORY)
     args = parser.parse_args()
-    result = unittest.TextTestRunner(verbosity=2).run(build_suite(args.repository))
-    return 0 if result.wasSuccessful() else 1
+    try:
+        verify_repository(args.repository)
+    except Exception as exc:
+        print(f"controller verifier failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(TRUSTED_VERIFIER_COMPLETION)
+    return 0
 
 
 if __name__ == "__main__":

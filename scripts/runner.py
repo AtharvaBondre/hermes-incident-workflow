@@ -149,6 +149,8 @@ if not isinstance(HERMES_SKILL, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", HER
     raise RuntimeError("trusted workflow policy Hermes skill is invalid")
 HERMES_REQUEST_VERSION = 1
 HERMES_PROPOSAL_VERSION = 1
+HERMES_REQUIRED_VERSION = "0.19.1"
+HERMES_QUALIFIED_REVISION = "26e0b1c1"
 MAX_HERMES_ATTEMPT_SECONDS = float(
     _bounded_policy_int(
         HERMES_POLICY["maximum_attempt_seconds"], 1, 900, "maximum attempt seconds"
@@ -184,6 +186,8 @@ CANDIDATE_TEST_ENVIRONMENT = (
     "USER=nobody",
 )
 CANDIDATE_TEST_LABEL = "hermes-incident-workflow.candidate-test"
+CANDIDATE_PROBE_PATH = PACKAGE_ROOT / "verifiers" / "candidate_probe.py"
+TRUSTED_VERIFIER_COMPLETION = "HIW_TRUSTED_VERIFIER_COMPLETED:v1"
 HERMES_IDENTITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,127}$")
 HERMES_PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HERMES_SESSION_PATTERN = re.compile(
@@ -867,6 +871,31 @@ def scenario_controller_verifier(scenario: dict[str, Any]) -> Path | None:
     return verifier
 
 
+def validate_scenario_candidate_paths(
+    scenario: dict[str, Any],
+    changed_paths: list[str],
+) -> None:
+    allowed = scenario.get("allowed_changed_paths")
+    if (
+        not isinstance(allowed, list)
+        or not allowed
+        or any(not isinstance(path, str) or not path for path in allowed)
+        or allowed != sorted(set(allowed))
+    ):
+        raise PolicyDenied("scenario exact changed-path policy is missing or invalid")
+    for path in allowed:
+        candidate = Path(path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise PolicyDenied("scenario exact changed-path policy is unsafe")
+        if not path.startswith(ALLOWED_PATCH_PREFIXES):
+            raise PolicyDenied("scenario exact changed-path policy exceeds workflow policy")
+    unexpected = sorted(set(changed_paths) - set(allowed))
+    if unexpected:
+        raise PolicyDenied(
+            f"candidate path is outside the scenario policy: {', '.join(unexpected)}"
+        )
+
+
 def apply_candidate(workspace: Path, patch_path: Path, deadline: float) -> dict[str, Any]:
     patch_text = patch_path.read_text(encoding="utf-8")
     paths = validate_patch(patch_text)
@@ -1478,8 +1507,14 @@ def _candidate_test_container_argv(
         verifier = verifier.resolve(strict=True)
         if not verifier.is_file():
             raise PolicyDenied("controller verifier is not a file")
+        candidate_probe = CANDIDATE_PROBE_PATH.resolve(strict=True)
+        if not candidate_probe.is_file():
+            raise PolicyDenied("trusted candidate probe is not a file")
         invocation.append(
             f"--mount={_candidate_test_bind_mount(verifier, '/verifier/controller.py')}"
+        )
+        invocation.append(
+            f"--mount={_candidate_test_bind_mount(candidate_probe, '/verifier/candidate_probe.py')}"
         )
     return [
         *invocation,
@@ -1647,20 +1682,41 @@ def controller_test(
     workspace: Path,
     verifier: Path | None,
     deadline: float,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     if verifier is None:
-        return None
+        return {
+            "command": "controller-owned verifier",
+            "exit_code": 1,
+            "process_exit_code": None,
+            "passed": False,
+            "trusted_verifier_completed": False,
+            "output": "required controller-owned verifier is missing",
+            "cleanup": {"complete": True, "removed": False},
+        }
     result, cleanup = _run_candidate_test_container(
         workspace,
         ["python", "/verifier/controller.py", "--repository", "/workspace"],
         deadline,
         verifier=verifier,
     )
+    output = redact_text(result.stdout)[-8000:]
+    output_lines = [line.strip() for line in output.splitlines() if line.strip()]
+    trusted_completed = (
+        result.returncode == 0
+        and output_lines.count(TRUSTED_VERIFIER_COMPLETION) == 1
+        and output_lines[-1] == TRUSTED_VERIFIER_COMPLETION
+    )
     return {
         "command": f"python {verifier.relative_to(PACKAGE_ROOT)} --repository <workspace>",
-        "exit_code": result.returncode,
-        "passed": result.returncode == 0,
-        "output": redact_text(result.stdout)[-8000:],
+        "exit_code": (
+            result.returncode
+            if result.returncode != 0
+            else (0 if trusted_completed else 1)
+        ),
+        "process_exit_code": result.returncode,
+        "passed": trusted_completed,
+        "trusted_verifier_completed": trusted_completed,
+        "output": output,
         "cleanup": cleanup,
     }
 
@@ -1798,13 +1854,13 @@ def scenario_test(
     with_docker: bool,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = [unit_test(workspace, deadline)]
-    hidden = controller_test(
-        workspace,
-        scenario_controller_verifier(scenario),
-        deadline,
+    checks.append(
+        controller_test(
+            workspace,
+            scenario_controller_verifier(scenario),
+            deadline,
+        )
     )
-    if hidden is not None:
-        checks.append(hidden)
     if with_docker and all(check["passed"] for check in checks):
         checks.append(compose_test(workspace, project, deadline, scenario))
     passed = all(check["passed"] for check in checks)
@@ -1839,9 +1895,7 @@ def independent_verify(
     try:
         candidate = apply_candidate(workspace, patch_path, deadline)
         checks: list[dict[str, Any]] = [unit_test(workspace, deadline)]
-        hidden = controller_test(workspace, verifier, deadline)
-        if hidden is not None:
-            checks.append(hidden)
+        checks.append(controller_test(workspace, verifier, deadline))
         passed = all(check["passed"] for check in checks)
         test_result = {
             "command": " && ".join(check["command"] for check in checks),
@@ -2073,6 +2127,7 @@ def run_flow(
                 raise PolicyDenied("candidate provider returned an unsupported object")
             candidate = provided_candidate.record
             validate_candidate_contract(candidate)
+            validate_scenario_candidate_paths(scenario, candidate["changed_paths"])
             if candidate["source"] != provider_source:
                 raise PolicyDenied("candidate source does not match its provider")
             if candidate["attempt"] != attempt:
@@ -2334,6 +2389,93 @@ def verify_hermes_real_model_artifacts(
     return sorted(set(issues))
 
 
+def _test_has_trusted_verifier_completion(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("passed") is not True:
+        return False
+    checks = value.get("checks")
+    if not isinstance(checks, list):
+        return False
+    trusted = [
+        check
+        for check in checks
+        if isinstance(check, dict) and "trusted_verifier_completed" in check
+    ]
+    if len(trusted) != 1:
+        return False
+    check = trusted[0]
+    output = check.get("output")
+    if not isinstance(output, str):
+        return False
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return (
+        check.get("passed") is True
+        and check.get("trusted_verifier_completed") is True
+        and check.get("exit_code") == 0
+        and check.get("process_exit_code") == 0
+        and lines.count(TRUSTED_VERIFIER_COMPLETION) == 1
+        and lines[-1] == TRUSTED_VERIFIER_COMPLETION
+    )
+
+
+def verify_trusted_completion_artifacts(
+    run_dir: Path,
+    control: dict[str, Any],
+) -> list[str]:
+    """Require trusted verifier completion for every successful provider run."""
+    issues: list[str] = []
+    attempt = control.get("attempts")
+    accepted_digest = control.get("candidate_digest")
+    if not isinstance(attempt, int) or attempt < 1:
+        return ["successful run has no accepted attempt"]
+    if not isinstance(accepted_digest, str):
+        return ["successful run has no accepted candidate digest"]
+
+    paths = {
+        "candidate": run_dir / f"attempt-{attempt}-candidate.json",
+        "result": run_dir / f"attempt-{attempt}-result.json",
+        "verification": run_dir / "verification.json",
+    }
+    records: dict[str, dict[str, Any]] = {}
+    for label, path in paths.items():
+        if not path.is_file():
+            issues.append(f"successful run is missing {label} artifact")
+            continue
+        try:
+            value = read_json(path)
+        except (OSError, json.JSONDecodeError):
+            issues.append(f"successful run has malformed {label} artifact")
+            continue
+        if not isinstance(value, dict):
+            issues.append(f"successful run has invalid {label} artifact")
+            continue
+        records[label] = value
+
+    candidate = records.get("candidate")
+    if candidate is not None and candidate.get("candidate_digest") != accepted_digest:
+        issues.append("accepted candidate artifact digest does not match control")
+
+    result = records.get("result")
+    if result is not None:
+        if result.get("attempt") != attempt:
+            issues.append("accepted result attempt does not match control")
+        if result.get("candidate_digest") != accepted_digest:
+            issues.append("accepted result digest does not match control")
+        if not _test_has_trusted_verifier_completion(result.get("test")):
+            issues.append("accepted result lacks trusted verifier completion")
+
+    verification = records.get("verification")
+    if verification is not None:
+        if verification.get("accepted") is not True:
+            issues.append("independent verification did not accept candidate")
+        if verification.get("candidate_digest") != accepted_digest:
+            issues.append("independent verification digest does not match control")
+        if verification.get("tested_digest") != accepted_digest:
+            issues.append("independent verification tested digest does not match control")
+        if not _test_has_trusted_verifier_completion(verification.get("test")):
+            issues.append("independent verification lacks trusted verifier completion")
+    return issues
+
+
 def verify_run(run_dir: Path) -> list[str]:
     issues: list[str] = []
     control_path = run_dir / "control.json"
@@ -2344,6 +2486,7 @@ def verify_run(run_dir: Path) -> list[str]:
         issues.append("attempt limit exceeded")
     github_path = run_dir / "mock-github.json"
     if control["outcome"] == "SUCCEEDED":
+        issues.extend(verify_trusted_completion_artifacts(run_dir, control))
         if not github_path.exists():
             issues.append("successful run has no mock GitHub delivery")
         else:
@@ -2393,7 +2536,11 @@ def cleanup_existing(run_dir: Path) -> dict[str, Any]:
     return closeout(run_dir, control, records)
 
 
-def preflight(with_docker: bool, require_hermes: bool = False) -> dict[str, Any]:
+def preflight(
+    with_docker: bool,
+    require_hermes: bool = False,
+    hermes_profile: str = HERMES_PROFILE,
+) -> dict[str, Any]:
     problems = []
     if Path.cwd().resolve() != PACKAGE_ROOT:
         problems.append("run from the package root through scripts/run-local.sh")
@@ -2404,13 +2551,53 @@ def preflight(with_docker: bool, require_hermes: bool = False) -> dict[str, Any]
         if not shutil.which(binary):
             problems.append(f"missing required command: {binary}")
     hermes_version = "unavailable"
+    profile_status = "not requested"
+    if not isinstance(hermes_profile, str) or HERMES_PROFILE_PATTERN.fullmatch(
+        hermes_profile
+    ) is None:
+        problems.append("Hermes profile name is invalid")
+        profile_status = "invalid"
     if require_hermes and not shutil.which("hermes"):
         problems.append("missing required command for a real-model run: hermes")
     elif shutil.which("hermes"):
         result = command(["hermes", "--version"], cwd=PACKAGE_ROOT, timeout=20)
         hermes_version = result.stdout.splitlines()[0] if result.stdout else "unknown"
-        if require_hermes and "v0.19.1" not in result.stdout:
-            problems.append("Hermes v0.19.1 is not the active local baseline")
+        version_match = re.match(
+            r"^Hermes Agent v([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)",
+            hermes_version,
+        )
+        revision_match = re.search(
+            r"\bupstream ([0-9a-f]{8,40})(?:\s|$)",
+            hermes_version,
+        )
+        if require_hermes and result.returncode != 0:
+            problems.append("Hermes version command failed")
+        elif require_hermes and (
+            version_match is None or version_match.group(1) != HERMES_REQUIRED_VERSION
+        ):
+            problems.append(
+                f"Hermes v{HERMES_REQUIRED_VERSION} is not the active local baseline"
+            )
+        elif require_hermes and (
+            revision_match is None
+            or revision_match.group(1) != HERMES_QUALIFIED_REVISION
+        ):
+            problems.append(
+                "Hermes build does not report qualified upstream revision "
+                f"{HERMES_QUALIFIED_REVISION}"
+            )
+        if require_hermes and profile_status != "invalid":
+            profile_result = command(
+                ["hermes", "profile", "info", hermes_profile],
+                cwd=PACKAGE_ROOT,
+                timeout=20,
+            )
+            profile_status = "available" if profile_result.returncode == 0 else "missing"
+            if profile_result.returncode != 0:
+                problems.append(
+                    f"Hermes profile {hermes_profile} is not installed; "
+                    "run scripts/install-hermes-profile.sh"
+                )
     docker_status = "not requested"
     if with_docker:
         if not shutil.which("docker"):
@@ -2455,6 +2642,7 @@ def preflight(with_docker: bool, require_hermes: bool = False) -> dict[str, Any]
         "ok": not problems,
         "package_root": str(PACKAGE_ROOT),
         "hermes": hermes_version,
+        "hermes_profile": {"name": hermes_profile, "status": profile_status},
         "docker": docker_status,
         "sensitive_environment_names": sensitive,
         "problems": problems,
@@ -2524,6 +2712,7 @@ def parser() -> argparse.ArgumentParser:
     preflight_parser = subcommands.add_parser("preflight")
     preflight_parser.add_argument("--with-docker", action="store_true")
     preflight_parser.add_argument("--require-hermes", action="store_true")
+    preflight_parser.add_argument("--hermes-profile", default=HERMES_PROFILE)
 
     run_parser = subcommands.add_parser("run")
     run_parser.add_argument(
@@ -2562,7 +2751,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     if args.command == "preflight":
-        result = preflight(args.with_docker, args.require_hermes)
+        result = preflight(args.with_docker, args.require_hermes, args.hermes_profile)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0 if result["ok"] else 1
     if args.command == "run":

@@ -32,7 +32,11 @@ The central rule is simple: **Hermes proposes; the controller decides.**
 - An isolated Hermes profile with no web, browser, memory, delegation, MCP, or persistent container access.
 - Read-only inputs, one dedicated writable output, a read-only container root, and Docker network mode `none` for editing tools.
 - Host-generated patches with size, path, symlink, binary, mode-change, and restricted-content checks.
-- Repository and controller-owned tests run in a pinned, network-disabled, read-only Docker sandbox; clean-workspace patch reapplication remains controller-owned.
+- Repository tests and a required controller-owned verifier run in a pinned,
+  network-disabled, read-only Docker sandbox. Candidate imports and calls run in
+  a subordinate executor behind a trusted supervisor; the verifier parent owns
+  assertions and the completion marker. Clean-workspace patch reapplication
+  remains controller-owned.
 - Hash-linked run artifacts and file-based draft GitHub and notification mocks.
 - An optional synthetic event-indexing example using PostgreSQL, Kafka, and OpenSearch.
 
@@ -47,6 +51,18 @@ The central rule is simple: **Hermes proposes; the controller decides.**
   another build reporting the same version is not yet qualified.
 
 The deterministic fixture workflow does not require model credentials or a model request.
+
+## Install
+
+```bash
+git clone https://github.com/AtharvaBondre/hermes-incident-workflow.git
+cd hermes-incident-workflow
+./scripts/bootstrap-pinned-images.sh sandbox
+```
+
+The fixture workflow can now run without Hermes or a model account. Install the
+external Hermes Agent only for the Hermes sandbox smoke or an opt-in real-model
+attempt.
 
 ## Quick start
 
@@ -118,7 +134,11 @@ The smoke test uses a local scripted model endpoint and makes no paid inference 
 
 ## Use a real Hermes model
 
-Configure provider authentication through Hermes outside this repository. Do not place provider credentials in project files or exported environment variables.
+Follow [Hermes model setup](docs/model-setup.md) to install the qualified
+version, install this repository's isolated profile, and configure provider
+authentication through Hermes' profile-scoped credential store. Do not place
+provider credentials in project files, `.env` files, command arguments, or
+exported environment variables.
 
 Then opt in explicitly:
 
@@ -135,7 +155,11 @@ Then opt in explicitly:
   --max-attempts 2
 ```
 
-The host Hermes process may contact the selected inference provider. Terminal tools remain in the network-disabled Docker sandbox, and the controller does not forward ambient provider keys to that container. Review your provider's data-processing and retention terms before sending any non-synthetic input.
+The host Hermes process is expected to contact the selected inference provider,
+but this project does not enforce or allowlist host egress. Terminal tools remain
+in the network-disabled Docker sandbox, and the controller does not forward
+ambient provider keys to that container. Review your provider's data-processing
+and retention terms before sending any non-synthetic input.
 
 ## Trust model
 
@@ -145,7 +169,7 @@ The host Hermes process may contact the selected inference provider. Terminal to
 | Incident and evidence | Untrusted bounded data |
 | Hermes proposal | Untrusted until the host derives and validates the patch |
 | Attempts and deadline | Deterministic controller |
-| Acceptance | Repository tests, controller verifier, optional service check, and clean reapply |
+| Acceptance | Repository tests, required trusted verifier completion, optional service check, and clean reapply |
 | Delivery | Local draft artifacts only |
 | Cleanup | Controller-owned and recorded |
 
@@ -171,7 +195,7 @@ Live observability, database, source-control, notification, and cloud connectors
 - [Threat model](docs/threat-model.md)
 - [Customer packs](docs/customer-packs.md)
 - [Adapting the workflow](docs/adapting-the-workflow.md)
-- [Product roadmap](docs/product-roadmap.md)
+- [Hermes model setup](docs/model-setup.md)
 - [Model costing and token accounting](docs/model-costing.md)
 - [Verification status](docs/verification.md)
 - [Container security baseline](docs/security-baseline.md)

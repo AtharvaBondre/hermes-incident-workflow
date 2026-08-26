@@ -18,5 +18,12 @@ dist/
 build/
 *.egg-info/
 
+# Local maintainer coordination (never publish)
+.kybernetes/
+docs/continuation-handoff-*.md
+docs/implementation-plan.md
+docs/product-roadmap.md
+docs/*-research-*.md
+
 # Editor and OS noise
 .DS_Store
