@@ -9,18 +9,30 @@ source, Python environment, model credentials, sessions, or user configuration.
 
 ## 1. Install and verify Hermes
 
-Follow the [official Hermes Agent installation
+Review the [official Hermes Agent installation
 instructions](https://github.com/NousResearch/hermes-agent#quick-install), then
-verify the installed build:
+use its installer with this repository's exact qualified source revision:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh \
+  | bash -s -- --commit 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+```
+
+Verify the installed build:
 
 ```bash
 hermes --version
 ```
 
-This repository currently requires Hermes Agent `v0.19.1` and was qualified
-against upstream revision `26e0b1c1`. The workflow preflight rejects a failed
-version lookup, a different semantic version, or a build that does not report
-that qualified revision.
+This repository currently requires Hermes Agent `v0.20.6` at source revision
+`5fc308a70719a83cccdbba4c0e39c23f5a8239d5`. The installer does not roll an
+existing newer checkout backward unless `--force-commit` is also supplied; use
+that option only when intentionally dedicating that Hermes installation to
+this qualified workflow version. Do not edit its `pyproject.toml` or `uv.lock`.
+The workflow verifies the direct checkout revision, a clean tracked and
+untracked tree, and the qualified hashes of both packaging files immediately
+before every real-model invocation. It does not trust the banner's moving
+`upstream` field.
 
 ## 2. Install the isolated workflow profile
 
@@ -33,8 +45,21 @@ hermes profile info hermes-incident-workflow
 ```
 
 The installed profile keeps its configuration and authentication outside this
-repository. Its terminal backend is Docker-based, network-disabled, and limited
-to the workflow's read-only input and writable output mounts.
+repository. For every real-model attempt, the controller creates a disposable
+Hermes home from the public profile and bridges only `.env`, `auth.json`, and
+`.anthropic_oauth.json` when those files exist in the selected installed
+profile. Only secret-shaped provider assignments are retained from `.env`;
+behavioral variables such as `HOME`, `HERMES_HOME`, `PATH`, and terminal
+settings are discarded. It never copies sessions, memories, logs, caches,
+attachments, or user configuration. The disposable home is deleted after the
+attempt, and a cleanup failure makes the candidate ineligible for delivery.
+
+The terminal backend remains Docker-based and network-disabled. Besides the
+read-only input, task, and skill mounts and the writable output mount, Hermes
+v0.20.6 adds read-only cache, image, and attachment mounts. Every one is
+sourced from the controller-created disposable profile, starts empty, and is
+checked by the sandbox smoke. No credential file is mounted into the candidate
+container.
 
 ## 3. Configure a provider and model
 
@@ -57,6 +82,12 @@ Do not use `--api-key "secret-value"` in a command because shell history may
 retain the secret. Do not create a repository `.env` file. The workflow
 launcher starts Hermes with a credential-free process environment;
 authentication must already exist in the selected Hermes profile.
+
+Prefer provider API keys stored by the profile-scoped setup flow. Credentials
+that exist only in another CLI's home directory are intentionally unavailable
+inside the isolated launcher home. Refreshable OAuth state is disposable for
+each attempt; configure a non-expiring provider key for repeatable unattended
+workflow runs.
 
 Provider and model identifiers passed to the workflow must match the values
 selected in Hermes. The available providers and models are owned by the
@@ -95,8 +126,9 @@ boundaries. No credential is copied into those containers.
 
 - **`hermes` not found:** complete the upstream installation and reload the
   shell indicated by its installer.
-- **Version rejected:** install the qualified Hermes version before using the
-  real-model path; do not weaken the version check.
+- **Version or checkout rejected:** install the exact qualified Hermes source
+  revision with its unmodified lockfile before using the real-model path; do
+  not weaken the identity checks.
 - **Profile missing:** rerun `./scripts/install-hermes-profile.sh`.
 - **Authentication failed:** rerun the profile-scoped `setup model` flow and
   check `hermes -p hermes-incident-workflow auth status "provider-id"`.

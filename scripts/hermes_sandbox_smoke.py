@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import os
 import shutil
 import subprocess
 import threading
@@ -16,6 +16,13 @@ from typing import Any
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+RUNNER_SPEC = importlib.util.spec_from_file_location(
+    "hiw_sandbox_runner",
+    PACKAGE_ROOT / "scripts" / "runner.py",
+)
+assert RUNNER_SPEC and RUNNER_SPEC.loader
+workflow_runner = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(workflow_runner)
 FIXTURE_REPOSITORY = PACKAGE_ROOT / "fixtures" / "repository"
 SANDBOX_TASK = PACKAGE_ROOT / "scripts" / "sandbox_task.py"
 ARTIFACTS = PACKAGE_ROOT / "artifacts"
@@ -39,40 +46,65 @@ EXPECTED_CONTAINER_ENVIRONMENT_NAMES = {
     "PYTHON_SHA256",
     "PYTHON_VERSION",
 }
+EXPECTED_HERMES_ENVIRONMENT = {
+    "AI_AGENT": "hermes-agent",
+    "GIT_PAGER": "cat",
+    "HERMES_AGENT": "true",
+    "PAGER": "cat",
+}
 
 
 def docker_ids() -> set[str]:
-    result = subprocess.run(
-        [
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            f"label=hermes-profile={PROFILE}",
-            "--format",
-            "{{.ID}}",
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=15,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"label=hermes-profile={PROFILE}",
+                "--format",
+                "{{.ID}}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Docker container enumeration failed") from exc
+    if result.returncode != 0:
+        raise RuntimeError("Docker container enumeration failed")
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
 def container_has_output_mount(container_id: str, output_dir: Path) -> bool:
-    result = subprocess.run(
-        ["docker", "inspect", container_id],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=15,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", container_id],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Docker container inspection failed") from exc
     if result.returncode != 0:
-        return False
-    data = json.loads(result.stdout)[0]
+        raise RuntimeError("Docker container inspection failed")
+    try:
+        inspected = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Docker container inspection failed") from exc
+    if (
+        not isinstance(inspected, list)
+        or len(inspected) != 1
+        or not isinstance(inspected[0], dict)
+        or not isinstance(inspected[0].get("Mounts"), list)
+    ):
+        raise RuntimeError("Docker container inspection returned an invalid result")
+    data = inspected[0]
     return any(
         item.get("Destination") == "/output"
         and Path(str(item.get("Source", ""))).resolve() == output_dir.resolve()
@@ -82,37 +114,59 @@ def container_has_output_mount(container_id: str, output_dir: Path) -> bool:
 
 def wait_and_cleanup_new_containers(
     before: set[str], output_dir: Path, grace_seconds: float = 15.0
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    observation_errors: list[str] = []
+
+    def observe_scoped() -> list[str]:
+        try:
+            current = docker_ids()
+        except RuntimeError as exc:
+            observation_errors.append(str(exc))
+            return []
+        observed: list[str] = []
+        for container_id in current - before:
+            try:
+                if container_has_output_mount(container_id, output_dir):
+                    observed.append(container_id)
+            except RuntimeError as exc:
+                observation_errors.append(str(exc))
+        return sorted(observed)
+
     deadline = time.monotonic() + grace_seconds
     remaining: list[str] = []
     while time.monotonic() < deadline:
-        remaining = sorted(
-            container_id
-            for container_id in docker_ids() - before
-            if container_has_output_mount(container_id, output_dir)
-        )
+        remaining = observe_scoped()
+        if observation_errors:
+            break
         if not remaining:
-            return [], [], []
+            return [], [], [], []
         time.sleep(0.25)
 
     forced: list[str] = []
     for container_id in remaining:
-        result = subprocess.run(
-            ["docker", "rm", "-f", container_id],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                ["docker", "rm", "-f", container_id],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            observation_errors.append(
+                f"Docker container removal failed: {type(exc).__name__}"
+            )
+            continue
         if result.returncode == 0:
             forced.append(container_id)
-    final_remaining = sorted(
-        container_id
-        for container_id in docker_ids() - before
-        if container_has_output_mount(container_id, output_dir)
+    final_remaining = observe_scoped()
+    return (
+        remaining,
+        forced,
+        final_remaining,
+        sorted(set(observation_errors)),
     )
-    return remaining, forced, final_remaining
 
 
 def inspect_new_container(before: set[str]) -> dict[str, Any]:
@@ -131,9 +185,11 @@ def inspect_new_container(before: set[str]) -> dict[str, Any]:
     if result.returncode != 0:
         return {"found": False, "inspect_error": result.stderr[-1000:]}
     data = json.loads(result.stdout)[0]
-    environment_names = sorted(
-        item.split("=", 1)[0] for item in data.get("Config", {}).get("Env", [])
-    )
+    environment = {
+        item.split("=", 1)[0]: item.split("=", 1)[1]
+        for item in data.get("Config", {}).get("Env", [])
+        if "=" in item
+    }
     mounts = sorted(
         (
             {
@@ -161,7 +217,8 @@ def inspect_new_container(before: set[str]) -> dict[str, Any]:
         "pids_limit": data.get("HostConfig", {}).get("PidsLimit"),
         "cap_drop": data.get("HostConfig", {}).get("CapDrop") or [],
         "cap_add": data.get("HostConfig", {}).get("CapAdd") or [],
-        "environment_names": environment_names,
+        "environment": environment,
+        "environment_names": sorted(environment),
         "tmpfs": data.get("HostConfig", {}).get("Tmpfs") or {},
         "mounts": mounts,
     }
@@ -339,49 +396,89 @@ def main() -> int:
     docker = shutil.which("docker")
     if not docker:
         raise SystemExit("docker is not on PATH")
+    runtime_identity = workflow_runner.inspect_hermes_runtime(hermes)
+    if runtime_identity.get("qualified") is not True:
+        problems = runtime_identity.get("problems") or []
+        detail = "; ".join(str(item) for item in problems)
+        raise SystemExit(
+            "Hermes runtime is not qualified for the sandbox smoke"
+            + (f": {detail}" if detail else "")
+        )
 
+    containers_before = docker_ids()
+    ModelHandler.containers_before = containers_before
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), ModelHandler)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = ARTIFACTS / f"{timestamp}-hermes-sandbox"
     output_dir = run_dir / "output"
-    output_dir.mkdir(parents=True)
-    containers_before = docker_ids()
-    ModelHandler.containers_before = containers_before
-
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), ModelHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    environment = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "USER": os.environ.get("USER", "admin"),
-        "SHELL": os.environ.get("SHELL", "/bin/zsh"),
-        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
-        "LANG": os.environ.get("LANG", "C.UTF-8"),
-        "OPENAI_API_KEY": "local-smoke-no-secret",
-        "HIW_HERMES_INPUT": str(FIXTURE_REPOSITORY.resolve()),
-        "HIW_HERMES_TASK": str(SANDBOX_TASK.resolve()),
-        "HIW_HERMES_OUTPUT": str(output_dir.resolve()),
-    }
-    command = [
-        hermes,
-        "-p",
-        PROFILE,
-        "chat",
-        "--skills",
-        "hermes-incident-remediation",
-        "--quiet",
-        "--yolo",
-        "--source",
-        "tool",
-        "--max-turns",
-        "4",
-        "--query",
-        (
-            "Run the local synthetic remediation sandbox smoke. Use the preloaded "
-            "Hermes Incident Workflow remediation skill, execute only the bounded task supplied by the "
-            "local scripted provider, and return its completion status."
-        ),
-    ]
+    disposable_profile: dict[str, Any] | None = None
+    thread: threading.Thread | None = None
+    try:
+        output_dir.mkdir(parents=True)
+        disposable_profile = workflow_runner.prepare_disposable_hermes_profile(
+            run_dir,
+            PROFILE,
+            credential_files=(),
+        )
+        profile_dir = disposable_profile["profile_dir"]
+        smoke_env = profile_dir / ".env"
+        smoke_env.write_text(
+            "OPENAI_API_KEY=local-smoke-no-secret\n", encoding="utf-8"
+        )
+        smoke_env.chmod(0o600)
+        environment = workflow_runner.hermes_process_environment(
+            input_dir=FIXTURE_REPOSITORY,
+            task_path=SANDBOX_TASK,
+            output_dir=output_dir,
+            hermes_root=disposable_profile["hermes_root"],
+            launcher_home=disposable_profile["launcher_home"],
+        )
+        command = [
+            hermes,
+            "-p",
+            PROFILE,
+            "chat",
+            "--skills",
+            "hermes-incident-remediation",
+            "--quiet",
+            "--yolo",
+            "--source",
+            "tool",
+            "--max-turns",
+            "4",
+            "--query",
+            (
+                "Run the local synthetic remediation sandbox smoke. Use the preloaded "
+                "Hermes Incident Workflow remediation skill, execute only the bounded "
+                "task supplied by the local scripted provider, and return its "
+                "completion status."
+            ),
+        ]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except Exception as exc:
+        if thread is not None and thread.is_alive():
+            server.shutdown()
+            thread.join(timeout=5)
+        server.server_close()
+        setup_cleanup = (
+            workflow_runner.cleanup_disposable_hermes_profile(disposable_profile)
+            if disposable_profile is not None
+            else {"removed": [], "remaining": [], "complete": True}
+        )
+        if run_dir.exists():
+            failure_record = {
+                "schema_version": 1,
+                "kind": "hermes-scripted-provider-sandbox-proof",
+                "ok": False,
+                "setup_error": f"{type(exc).__name__}: {exc}",
+                "disposable_profile_cleanup": setup_cleanup,
+            }
+            (run_dir / "hermes-runtime-proof.json").write_text(
+                json.dumps(failure_record, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        raise
     started = time.monotonic()
     returncode: int | None = None
     stdout = ""
@@ -413,9 +510,12 @@ def main() -> int:
         thread.join(timeout=5)
     elapsed = round(time.monotonic() - started, 3)
     proof_path = output_dir / "sandbox-proof.json"
-    grace_remaining, harness_removed, final_remaining = wait_and_cleanup_new_containers(
-        containers_before, output_dir
-    )
+    (
+        grace_remaining,
+        harness_removed,
+        final_remaining,
+        cleanup_observation_errors,
+    ) = wait_and_cleanup_new_containers(containers_before, output_dir)
     sandbox_proof, proof_parse_error = parse_sandbox_proof(proof_path)
     runtime = ModelHandler.container_inspection
     expected_mounts = {
@@ -423,11 +523,17 @@ def main() -> int:
         "/task/sandbox_task.py": {"source": str(SANDBOX_TASK.resolve()), "read_write": False, "type": "bind"},
         "/output": {"source": str(output_dir.resolve()), "read_write": True, "type": "bind"},
         "/root/.hermes/skills": {
-            "source": str((Path.home() / ".hermes" / "profiles" / PROFILE / "skills").resolve()),
+            "source": str((profile_dir / "skills").resolve()),
             "read_write": False,
             "type": "bind",
         },
     }
+    for relative in workflow_runner.HERMES_CACHE_DIRECTORIES:
+        expected_mounts[f"/root/.hermes/{relative}"] = {
+            "source": str((profile_dir / relative).resolve()),
+            "read_write": False,
+            "type": "bind",
+        }
     observed_mounts = {
         item.get("destination"): {
             "source": item.get("source"),
@@ -437,7 +543,16 @@ def main() -> int:
         for item in runtime.get("mounts", [])
         if item.get("type") == "bind"
     }
+    cache_mount_sources_empty = all(
+        (profile_dir / relative).is_dir()
+        and not any((profile_dir / relative).iterdir())
+        for relative in workflow_runner.HERMES_CACHE_DIRECTORIES
+    )
+    profile_cleanup = workflow_runner.cleanup_disposable_hermes_profile(
+        disposable_profile
+    )
     checks = {
+        "hermes_runtime_qualified": runtime_identity["qualified"],
         "hermes_exit_zero": returncode == 0,
         "two_agent_model_turns": ModelHandler.agent_request_count == 2,
         "tool_surface_exact": set(ModelHandler.tool_names) == EXPECTED_TOOL_NAMES,
@@ -450,6 +565,16 @@ def main() -> int:
         "container_mounts_exact": observed_mounts == expected_mounts,
         "container_env_exact": set(runtime.get("environment_names", []))
         == EXPECTED_CONTAINER_ENVIRONMENT_NAMES,
+        "container_hermes_env_values_exact": bool(
+            sandbox_proof
+            and sandbox_proof.get("hermes_environment") == EXPECTED_HERMES_ENVIRONMENT
+        ),
+        "container_cache_sources_empty": cache_mount_sources_empty,
+        "container_has_no_credential_mounts": all(
+            item.get("destination")
+            not in {"/root/.hermes/.env", "/root/.hermes/auth.json"}
+            for item in runtime.get("mounts", [])
+        ),
         "container_not_privileged": runtime.get("privileged") is False,
         "container_rootfs_read_only": runtime.get("read_only_rootfs") is True,
         "container_no_new_privileges": any(
@@ -471,7 +596,9 @@ def main() -> int:
         "candidate_cache_clean": bool(sandbox_proof is not None and sandbox_proof.get("cache_files") == []),
         "tests_passed_in_task": bool(sandbox_proof and sandbox_proof.get("test_passed")),
         "container_removed_after_run": not grace_remaining,
-        "failure_cleanup_complete": not final_remaining,
+        "failure_cleanup_complete": not final_remaining
+        and not cleanup_observation_errors,
+        "disposable_profile_cleanup_complete": profile_cleanup["complete"],
     }
     record = {
         "schema_version": 1,
@@ -493,6 +620,8 @@ def main() -> int:
         "containers_remaining_after_grace": [item[:12] for item in grace_remaining],
         "containers_removed_by_harness": [item[:12] for item in harness_removed],
         "containers_remaining_after_harness_cleanup": [item[:12] for item in final_remaining],
+        "cleanup_observation_errors": cleanup_observation_errors,
+        "disposable_profile_cleanup": profile_cleanup,
         "hermes_stdout": stdout[-4000:],
         "hermes_stderr": stderr[-4000:],
     }

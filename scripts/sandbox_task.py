@@ -17,18 +17,28 @@ OUTPUT = Path("/output")
 WORKSPACE = OUTPUT / "workspace"
 PROOF = OUTPUT / "sandbox-proof.json"
 ALLOWED_ENVIRONMENT_NAMES = {
+    "AI_AGENT",
+    "GIT_PAGER",
+    "HERMES_AGENT",
     "HIW_SANDBOX_MODE",
     "GPG_KEY",
     "HOME",
     "HOSTNAME",
     "LANG",
     "OLDPWD",
+    "PAGER",
     "PATH",
     "PWD",
     "PYTHON_SHA256",
     "PYTHON_VERSION",
     "SHLVL",
     "_",
+}
+EXPECTED_HERMES_ENVIRONMENT = {
+    "AI_AGENT": "hermes-agent",
+    "GIT_PAGER": "cat",
+    "HERMES_AGENT": "true",
+    "PAGER": "cat",
 }
 
 
@@ -63,6 +73,11 @@ def main() -> int:
             "unapproved environment names reached the sandbox: "
             f"{unexpected_environment_names}"
         )
+    hermes_environment = {
+        name: os.environ.get(name) for name in EXPECTED_HERMES_ENVIRONMENT
+    }
+    if hermes_environment != EXPECTED_HERMES_ENVIRONMENT:
+        raise RuntimeError("Hermes sandbox environment values differ from the qualified baseline")
 
     input_read_only = False
     try:
@@ -125,6 +140,7 @@ def main() -> int:
         "network_blocked": network_blocked,
         "environment_names": environment_names,
         "unexpected_environment_names": unexpected_environment_names,
+        "hermes_environment": hermes_environment,
         "cache_files": cache_files,
         "changed_paths": ["app/subject.py"],
         "candidate_digest": tree_digest(WORKSPACE),

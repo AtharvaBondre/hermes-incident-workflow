@@ -187,6 +187,11 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             list(runner.ALLOWED_PATCH_PREFIXES),
         )
         self.assertEqual(policy["hermes"]["proposal_authority"], "reporting-only")
+        self.assertEqual(policy["hermes"]["required_version"], "0.20.6")
+        self.assertEqual(
+            policy["hermes"]["profile_state"],
+            "controller-owned-disposable-per-attempt",
+        )
         self.assertEqual(policy["delivery"]["mode"], "draft-artifacts-only")
         self.assertFalse(policy["delivery"]["merge"])
         self.assertFalse(policy["delivery"]["deployment"])

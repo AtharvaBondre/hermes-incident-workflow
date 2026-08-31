@@ -149,8 +149,27 @@ if not isinstance(HERMES_SKILL, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", HER
     raise RuntimeError("trusted workflow policy Hermes skill is invalid")
 HERMES_REQUEST_VERSION = 1
 HERMES_PROPOSAL_VERSION = 1
-HERMES_REQUIRED_VERSION = "0.19.1"
-HERMES_QUALIFIED_REVISION = "26e0b1c1"
+HERMES_REQUIRED_VERSION = "0.20.6"
+HERMES_QUALIFIED_REVISION = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+HERMES_PYPROJECT_SHA256 = "9b6d41aca6d908e5af2f90a335b1c2b7eeaf8e3ce667b5a823a73e8643c56c75"
+HERMES_LOCK_SHA256 = "5a9276183671e997c2213ede18b9cda4920e1cf57616219a3b08ddebda3281ab"
+HERMES_PROFILE_SOURCE = PACKAGE_ROOT / "hermes-profile"
+HERMES_CREDENTIAL_FILES = (".env", "auth.json", ".anthropic_oauth.json")
+HERMES_CREDENTIAL_ENV_NAME = re.compile(
+    r"^[A-Z][A-Z0-9_]{0,119}(?:API_KEY|TOKEN|SECRET|ACCESS_KEY_ID)$"
+)
+HERMES_CACHE_DIRECTORIES = (
+    "cache/documents",
+    "cache/images",
+    "cache/audio",
+    "cache/videos",
+    "cache/screenshots",
+    "cache/web",
+    "cache/delegation",
+    "cache/spillover",
+    "images",
+    "attachments",
+)
 MAX_HERMES_ATTEMPT_SECONDS = float(
     _bounded_policy_int(
         HERMES_POLICY["maximum_attempt_seconds"], 1, 900, "maximum attempt seconds"
@@ -994,10 +1013,10 @@ def hermes_container_ids(profile: str = HERMES_PROFILE) -> set[str]:
             timeout=15,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FlowError("Docker container enumeration failed") from exc
     if result.returncode != 0:
-        return set()
+        raise FlowError("Docker container enumeration failed")
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
@@ -1013,12 +1032,17 @@ def hermes_container_has_output_mount(container_id: str, output_dir: Path) -> bo
             check=False,
         )
         if result.returncode != 0:
-            return False
+            raise FlowError("Docker container inspection failed")
         inspected = json.loads(result.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        return False
-    if not isinstance(inspected, list) or len(inspected) != 1:
-        return False
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        raise FlowError("Docker container inspection failed") from exc
+    if (
+        not isinstance(inspected, list)
+        or len(inspected) != 1
+        or not isinstance(inspected[0], dict)
+        or not isinstance(inspected[0].get("Mounts"), list)
+    ):
+        raise FlowError("Docker container inspection returned an invalid result")
     expected = output_dir.resolve()
     return any(
         mount.get("Destination") == "/output"
@@ -1028,22 +1052,44 @@ def hermes_container_has_output_mount(container_id: str, output_dir: Path) -> bo
 
 
 def cleanup_hermes_containers(
-    before: set[str],
+    before: set[str] | None,
     output_dir: Path,
     *,
     profile: str = HERMES_PROFILE,
     grace_seconds: float = 2.0,
 ) -> dict[str, Any]:
     """Remove only new profile containers bound to this attempt's output."""
+    if before is None:
+        return {
+            "scoped_container_ids": [],
+            "removed_container_ids": [],
+            "remaining_container_ids": [],
+            "observation_errors": ["initial Docker container baseline is unavailable"],
+            "complete": False,
+        }
+
+    observation_errors: list[str] = []
+
+    def observe_scoped() -> list[str]:
+        try:
+            current = hermes_container_ids(profile)
+        except FlowError as exc:
+            observation_errors.append(str(exc))
+            return []
+        observed: list[str] = []
+        for container_id in current - before:
+            try:
+                if hermes_container_has_output_mount(container_id, output_dir):
+                    observed.append(container_id)
+            except FlowError as exc:
+                observation_errors.append(str(exc))
+        return sorted(observed)
+
     deadline = time.monotonic() + grace_seconds
     scoped: list[str] = []
     while True:
-        scoped = sorted(
-            container_id
-            for container_id in hermes_container_ids(profile) - before
-            if hermes_container_has_output_mount(container_id, output_dir)
-        )
-        if not scoped or time.monotonic() >= deadline:
+        scoped = observe_scoped()
+        if observation_errors or not scoped or time.monotonic() >= deadline:
             break
         time.sleep(0.1)
 
@@ -1063,16 +1109,13 @@ def cleanup_hermes_containers(
             continue
         if result.returncode == 0:
             removed.append(container_id)
-    remaining = sorted(
-        container_id
-        for container_id in hermes_container_ids(profile) - before
-        if hermes_container_has_output_mount(container_id, output_dir)
-    )
+    remaining = observe_scoped()
     return {
         "scoped_container_ids": [item[:12] for item in scoped],
         "removed_container_ids": [item[:12] for item in removed],
         "remaining_container_ids": [item[:12] for item in remaining],
-        "complete": not remaining,
+        "observation_errors": sorted(set(observation_errors)),
+        "complete": not remaining and not observation_errors,
     }
 
 
@@ -1116,11 +1159,168 @@ def run_hermes_process(
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
+def _validate_profile_distribution_tree(source: Path) -> None:
+    """Reject links, special files, and oversized files before copying a profile."""
+    if source.is_symlink() or not source.is_dir():
+        raise PolicyDenied("Hermes profile distribution is not a regular directory")
+    for path in source.rglob("*"):
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+            raise PolicyDenied("Hermes profile distribution contains an irregular file")
+        if stat.S_ISREG(mode) and path.stat().st_size > 1_000_000:
+            raise PolicyDenied("Hermes profile distribution contains an oversized file")
+
+
+def _copy_profile_credential(source: Path, destination: Path) -> None:
+    """Copy one allowlisted profile credential without following symlinks."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(source, flags)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise PolicyDenied("Hermes profile credential is not a safe regular file") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1_000_000:
+            raise PolicyDenied("Hermes profile credential is not a safe regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = stream.read(1_000_001)
+        if len(payload) > 1_000_000:
+            raise PolicyDenied("Hermes profile credential exceeds the one-megabyte limit")
+    finally:
+        os.close(descriptor)
+    if source.name == ".env":
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PolicyDenied("Hermes profile .env is not valid UTF-8") from exc
+        retained: list[str] = []
+        seen: set[str] = set()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[7:].lstrip()
+            if "=" not in stripped:
+                raise PolicyDenied("Hermes profile .env contains an invalid assignment")
+            name, value = stripped.split("=", 1)
+            name = name.strip()
+            if HERMES_CREDENTIAL_ENV_NAME.fullmatch(name) is None:
+                continue
+            if name in seen:
+                raise PolicyDenied("Hermes profile .env repeats a credential name")
+            seen.add(name)
+            retained.append(f"{name}={value}")
+        if not retained:
+            return
+        payload = ("\n".join(retained) + "\n").encode("utf-8")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("xb") as stream:
+        stream.write(payload)
+    destination.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def prepare_disposable_hermes_profile(
+    worker_root: Path,
+    profile: str,
+    *,
+    source_profile: Path | None = None,
+    credential_files: tuple[str, ...] = HERMES_CREDENTIAL_FILES,
+) -> dict[str, Any]:
+    """Create the controller-owned, per-attempt Hermes home.
+
+    Only the public profile distribution and three explicitly allowlisted
+    profile credential files enter this home. Runtime caches and sessions are
+    therefore isolated from the user's long-lived profile and are deleted at
+    the end of the attempt.
+    """
+    if HERMES_PROFILE_PATTERN.fullmatch(profile) is None:
+        raise PolicyDenied("Hermes profile name is invalid")
+    if (
+        len(credential_files) != len(set(credential_files))
+        or any(item not in HERMES_CREDENTIAL_FILES for item in credential_files)
+    ):
+        raise PolicyDenied("Hermes credential bridge is outside the compiled allowlist")
+    _validate_profile_distribution_tree(HERMES_PROFILE_SOURCE)
+    if source_profile is None:
+        source_profile = Path.home() / ".hermes" / "profiles" / profile
+    source_profile = source_profile.expanduser()
+    if source_profile.is_symlink() or not source_profile.is_dir():
+        raise FlowError(
+            f"Hermes profile {profile} is not installed; run scripts/install-hermes-profile.sh"
+        )
+    worker_root = worker_root.resolve()
+    hermes_root = worker_root / "hermes-home"
+    profile_dir = hermes_root / "profiles" / profile
+    launcher_home = worker_root / "launcher-home"
+    if hermes_root.exists() or launcher_home.exists():
+        raise PolicyDenied("disposable Hermes home already exists")
+    profile_dir.parent.mkdir(parents=True, mode=0o700)
+    shutil.copytree(HERMES_PROFILE_SOURCE, profile_dir)
+    profile_dir.chmod(0o700)
+    launcher_home.mkdir(mode=0o700)
+    (launcher_home / "tmp").mkdir(mode=0o700)
+
+    copied_credentials: list[str] = []
+    try:
+        for relative in credential_files:
+            destination = profile_dir / relative
+            _copy_profile_credential(source_profile / relative, destination)
+            if destination.is_file():
+                copied_credentials.append(relative)
+
+        for relative in HERMES_CACHE_DIRECTORIES:
+            (profile_dir / relative).mkdir(parents=True, exist_ok=True, mode=0o700)
+    except Exception:
+        shutil.rmtree(hermes_root, ignore_errors=True)
+        shutil.rmtree(launcher_home, ignore_errors=True)
+        raise
+    return {
+        "hermes_root": hermes_root,
+        "profile_dir": profile_dir,
+        "launcher_home": launcher_home,
+        "credential_files": copied_credentials,
+    }
+
+
+def cleanup_disposable_hermes_profile(prepared: dict[str, Any]) -> dict[str, Any]:
+    """Delete the isolated Hermes state and report a fail-closed result."""
+    remaining: list[str] = []
+    removed: list[str] = []
+    for label in ("hermes_root", "launcher_home"):
+        path = prepared.get(label)
+        if not isinstance(path, Path):
+            remaining.append(label)
+            continue
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            remaining.append(label)
+            continue
+        if path.exists():
+            remaining.append(label)
+        else:
+            removed.append(label)
+    return {
+        "removed": sorted(removed),
+        "remaining": sorted(set(remaining)),
+        "complete": not remaining,
+    }
+
+
 def hermes_process_environment(
     *,
     input_dir: Path,
     task_path: Path,
     output_dir: Path,
+    hermes_root: Path,
+    launcher_home: Path,
     provider: str | None = None,
 ) -> dict[str, str]:
     """Build a credential-free launcher environment.
@@ -1131,10 +1331,14 @@ def hermes_process_environment(
     del provider
     return {
         "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", str(Path.home())),
-        "USER": os.environ.get("USER", "user"),
-        "SHELL": os.environ.get("SHELL", "/bin/sh"),
-        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "HOME": str(launcher_home.resolve()),
+        "HERMES_HOME": str(hermes_root.resolve()),
+        "USER": "user",
+        "SHELL": "/bin/sh",
+        "TMPDIR": str((launcher_home / "tmp").resolve()),
+        "XDG_CACHE_HOME": str((launcher_home / ".cache").resolve()),
+        "XDG_CONFIG_HOME": str((launcher_home / ".config").resolve()),
+        "XDG_DATA_HOME": str((launcher_home / ".local" / "share").resolve()),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "NO_COLOR": "1",
         "HERMES_SIGTERM_GRACE": "0.5",
@@ -1335,14 +1539,9 @@ class HermesCandidateProvider:
             "--query",
             prompt,
         ]
-        environment = hermes_process_environment(
-            input_dir=workspace,
-            task_path=request_path,
-            output_dir=output_dir,
-            provider=self.provider,
-        )
-        containers_before = hermes_container_ids(self.profile)
+        containers_before: set[str] | None = None
         started = time.monotonic()
+        disposable_profile: dict[str, Any] | None = None
         completed: subprocess.CompletedProcess[str] | None = None
         session_id: str | None = None
         proposal: dict[str, Any] | None = None
@@ -1355,10 +1554,37 @@ class HermesCandidateProvider:
             "provider": self.provider,
             "model": self.model,
             "fresh_session": True,
+            "disposable_profile": True,
+            "credential_files_bridged": [],
             "controller_is_sole_acceptor": True,
             "outcome": "RUNNING",
         }
         try:
+            containers_before = hermes_container_ids(self.profile)
+            disposable_profile = prepare_disposable_hermes_profile(
+                worker_root,
+                self.profile,
+            )
+            execution["credential_files_bridged"] = disposable_profile[
+                "credential_files"
+            ]
+            environment = hermes_process_environment(
+                input_dir=workspace,
+                task_path=request_path,
+                output_dir=output_dir,
+                hermes_root=disposable_profile["hermes_root"],
+                launcher_home=disposable_profile["launcher_home"],
+                provider=self.provider,
+            )
+            runtime_identity = inspect_hermes_runtime(hermes)
+            execution["runtime_identity"] = runtime_identity
+            if runtime_identity.get("qualified") is not True:
+                problems = runtime_identity.get("problems")
+                detail = "; ".join(str(item) for item in problems or [])
+                raise PolicyDenied(
+                    "Hermes runtime failed qualification immediately before execution"
+                    + (f": {detail}" if detail else "")
+                )
             completed = run_hermes_process(
                 invocation,
                 cwd=PACKAGE_ROOT,
@@ -1439,10 +1665,44 @@ class HermesCandidateProvider:
             raise
         finally:
             active_error = sys.exc_info()[0] is not None
-            cleanup = cleanup_hermes_containers(
-                containers_before,
-                output_dir,
-                profile=self.profile,
+            try:
+                cleanup = cleanup_hermes_containers(
+                    containers_before,
+                    output_dir,
+                    profile=self.profile,
+                )
+            except Exception as exc:
+                cleanup = {
+                    "scoped_container_ids": [],
+                    "removed_container_ids": [],
+                    "remaining_container_ids": [],
+                    "observation_errors": [
+                        f"unexpected cleanup error: {type(exc).__name__}"
+                    ],
+                    "complete": False,
+                }
+            profile_cleanup = (
+                cleanup_disposable_hermes_profile(disposable_profile)
+                if disposable_profile is not None
+                else {"removed": [], "remaining": [], "complete": True}
+            )
+            worker_cleanup: dict[str, Any] = {"complete": True, "remaining": []}
+            try:
+                shutil.rmtree(worker_root)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                worker_cleanup["complete"] = False
+            if worker_root.exists():
+                worker_cleanup["complete"] = False
+            if not worker_cleanup["complete"]:
+                worker_cleanup["remaining"] = ["worker_root"]
+            cleanup["profile_state"] = profile_cleanup
+            cleanup["worker_directory"] = worker_cleanup
+            cleanup["complete"] = bool(
+                cleanup["complete"]
+                and profile_cleanup["complete"]
+                and worker_cleanup["complete"]
             )
             cleanup_failure = not cleanup["complete"] and not active_error
             if cleanup_failure:
@@ -1455,9 +1715,8 @@ class HermesCandidateProvider:
                 execution["stdout_tail"] = redact_text(completed.stdout)[-4000:]
                 execution["stderr_tail"] = redact_text(completed.stderr)[-4000:]
             write_json(execution_path, redact(execution))
-            shutil.rmtree(worker_root, ignore_errors=True)
             if cleanup_failure:
-                raise FlowError("Hermes container cleanup did not complete")
+                raise FlowError("Hermes attempt cleanup did not complete")
 
 
 def _candidate_test_bind_mount(source: Path, destination: str) -> str:
@@ -2356,9 +2615,50 @@ def verify_hermes_real_model_artifacts(
             value = execution.get(field)
             if not isinstance(value, str) or HERMES_IDENTITY_PATTERN.fullmatch(value) is None:
                 issues.append(f"Hermes execution {field} is invalid")
+        if execution.get("fresh_session") is not True:
+            issues.append("Hermes execution did not start a fresh session")
+        if execution.get("controller_is_sole_acceptor") is not True:
+            issues.append("Hermes execution authority boundary is invalid")
+        if execution.get("disposable_profile") is not True:
+            issues.append("Hermes execution did not use a disposable profile")
+        runtime_identity = execution.get("runtime_identity")
+        if (
+            not isinstance(runtime_identity, dict)
+            or runtime_identity.get("qualified") is not True
+            or runtime_identity.get("version") != HERMES_REQUIRED_VERSION
+            or runtime_identity.get("revision") != HERMES_QUALIFIED_REVISION
+            or runtime_identity.get("checkout_clean") is not True
+            or runtime_identity.get("pyproject_sha256") != HERMES_PYPROJECT_SHA256
+            or runtime_identity.get("lock_sha256") != HERMES_LOCK_SHA256
+            or runtime_identity.get("problems") != []
+        ):
+            issues.append("Hermes execution runtime identity is not qualified")
+        bridged_credentials = execution.get("credential_files_bridged")
+        if (
+            not isinstance(bridged_credentials, list)
+            or any(item not in HERMES_CREDENTIAL_FILES for item in bridged_credentials)
+            or len(bridged_credentials) != len(set(bridged_credentials))
+        ):
+            issues.append("Hermes execution credential bridge is invalid")
         cleanup = execution.get("cleanup")
-        if not isinstance(cleanup, dict) or cleanup.get("complete") is not True:
+        if (
+            not isinstance(cleanup, dict)
+            or cleanup.get("complete") is not True
+            or cleanup.get("observation_errors") != []
+        ):
             issues.append("Hermes execution cleanup did not complete")
+        elif (
+            not isinstance(cleanup.get("profile_state"), dict)
+            or cleanup["profile_state"].get("complete") is not True
+            or cleanup["profile_state"].get("remaining") != []
+        ):
+            issues.append("Hermes disposable profile cleanup did not complete")
+        elif (
+            not isinstance(cleanup.get("worker_directory"), dict)
+            or cleanup["worker_directory"].get("complete") is not True
+            or cleanup["worker_directory"].get("remaining") != []
+        ):
+            issues.append("Hermes worker directory cleanup did not complete")
         if execution.get("patch_sha256") != candidate.get("patch_sha256"):
             issues.append("Hermes execution patch SHA does not match candidate")
         if execution.get("candidate_digest") != accepted_digest:
@@ -2536,6 +2836,109 @@ def cleanup_existing(run_dir: Path) -> dict[str, Any]:
     return closeout(run_dir, control, records)
 
 
+def inspect_hermes_runtime(hermes: str = "hermes") -> dict[str, Any]:
+    """Verify the exact external Hermes checkout instead of its moving banner."""
+    identity: dict[str, Any] = {
+        "version": None,
+        "revision": None,
+        "checkout_clean": False,
+        "pyproject_sha256": None,
+        "lock_sha256": None,
+        "qualified": False,
+        "problems": [],
+    }
+    try:
+        version_result = command([hermes, "--version"], cwd=PACKAGE_ROOT, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        identity["problems"].append("Hermes version command failed")
+        return identity
+    output = version_result.stdout or ""
+    lines = output.splitlines()
+    first_line = lines[0] if lines else ""
+    identity["version_line"] = first_line
+    version_match = re.match(
+        r"^Hermes Agent v([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)",
+        first_line,
+    )
+    if version_result.returncode != 0:
+        identity["problems"].append("Hermes version command failed")
+    elif version_match is None:
+        identity["problems"].append("Hermes version output is not recognized")
+    else:
+        identity["version"] = version_match.group(1)
+        if identity["version"] != HERMES_REQUIRED_VERSION:
+            identity["problems"].append(
+                f"Hermes v{HERMES_REQUIRED_VERSION} is not the active local baseline"
+            )
+
+    install_matches = re.findall(r"^Install directory:\s*(.+?)\s*$", output, re.MULTILINE)
+    if len(install_matches) != 1:
+        identity["problems"].append("Hermes install directory is not uniquely reported")
+        return identity
+    install_root = Path(install_matches[0]).expanduser()
+    if not install_root.is_absolute() or install_root.is_symlink() or not install_root.is_dir():
+        identity["problems"].append("Hermes install directory is not a regular source checkout")
+        return identity
+    install_root = install_root.resolve()
+
+    try:
+        revision_result = command(
+            ["git", "-C", str(install_root), "rev-parse", "HEAD"],
+            cwd=PACKAGE_ROOT,
+            timeout=20,
+        )
+        clean_result = command(
+            [
+                "git",
+                "-C",
+                str(install_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
+            cwd=PACKAGE_ROOT,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        identity["problems"].append("Hermes source checkout identity could not be verified")
+        return identity
+    revision = revision_result.stdout.strip() if revision_result.returncode == 0 else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        identity["problems"].append("Hermes source checkout revision is unavailable")
+    else:
+        identity["revision"] = revision
+        if revision != HERMES_QUALIFIED_REVISION:
+            identity["problems"].append(
+                f"Hermes source checkout is not qualified revision {HERMES_QUALIFIED_REVISION}"
+            )
+    identity["checkout_clean"] = (
+        clean_result.returncode == 0 and not clean_result.stdout.strip()
+    )
+    if not identity["checkout_clean"]:
+        identity["problems"].append(
+            "Hermes source checkout has tracked or untracked changes"
+        )
+
+    for filename, field, expected in (
+        ("pyproject.toml", "pyproject_sha256", HERMES_PYPROJECT_SHA256),
+        ("uv.lock", "lock_sha256", HERMES_LOCK_SHA256),
+    ):
+        path = install_root / filename
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+                raise OSError
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            identity["problems"].append(f"Hermes {filename} cannot be verified")
+            continue
+        identity[field] = digest
+        if digest != expected:
+            identity["problems"].append(f"Hermes {filename} digest is not qualified")
+
+    identity["qualified"] = not identity["problems"]
+    return identity
+
+
 def preflight(
     with_docker: bool,
     require_hermes: bool = False,
@@ -2551,6 +2954,7 @@ def preflight(
         if not shutil.which(binary):
             problems.append(f"missing required command: {binary}")
     hermes_version = "unavailable"
+    hermes_runtime: dict[str, Any] | None = None
     profile_status = "not requested"
     if not isinstance(hermes_profile, str) or HERMES_PROFILE_PATTERN.fullmatch(
         hermes_profile
@@ -2560,32 +2964,10 @@ def preflight(
     if require_hermes and not shutil.which("hermes"):
         problems.append("missing required command for a real-model run: hermes")
     elif shutil.which("hermes"):
-        result = command(["hermes", "--version"], cwd=PACKAGE_ROOT, timeout=20)
-        hermes_version = result.stdout.splitlines()[0] if result.stdout else "unknown"
-        version_match = re.match(
-            r"^Hermes Agent v([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)",
-            hermes_version,
-        )
-        revision_match = re.search(
-            r"\bupstream ([0-9a-f]{8,40})(?:\s|$)",
-            hermes_version,
-        )
-        if require_hermes and result.returncode != 0:
-            problems.append("Hermes version command failed")
-        elif require_hermes and (
-            version_match is None or version_match.group(1) != HERMES_REQUIRED_VERSION
-        ):
-            problems.append(
-                f"Hermes v{HERMES_REQUIRED_VERSION} is not the active local baseline"
-            )
-        elif require_hermes and (
-            revision_match is None
-            or revision_match.group(1) != HERMES_QUALIFIED_REVISION
-        ):
-            problems.append(
-                "Hermes build does not report qualified upstream revision "
-                f"{HERMES_QUALIFIED_REVISION}"
-            )
+        hermes_runtime = inspect_hermes_runtime()
+        hermes_version = str(hermes_runtime.get("version_line") or "unknown")
+        if require_hermes:
+            problems.extend(str(item) for item in hermes_runtime["problems"])
         if require_hermes and profile_status != "invalid":
             profile_result = command(
                 ["hermes", "profile", "info", hermes_profile],
@@ -2642,6 +3024,7 @@ def preflight(
         "ok": not problems,
         "package_root": str(PACKAGE_ROOT),
         "hermes": hermes_version,
+        "hermes_runtime": hermes_runtime,
         "hermes_profile": {"name": hermes_profile, "status": profile_status},
         "docker": docker_status,
         "sensitive_environment_names": sensitive,
@@ -2676,8 +3059,12 @@ def dump_policy() -> dict[str, Any]:
         "hermes": {
             "profile": HERMES_PROFILE,
             "skill": HERMES_SKILL,
+            "required_version": HERMES_REQUIRED_VERSION,
+            "qualified_revision": HERMES_QUALIFIED_REVISION,
             "maximum_attempt_seconds": int(MAX_HERMES_ATTEMPT_SECONDS),
             "proposal_authority": "reporting-only",
+            "profile_state": "controller-owned-disposable-per-attempt",
+            "credential_files": list(HERMES_CREDENTIAL_FILES),
         },
         "limits": {
             "hard_maximum_attempts": MAX_SEMANTIC_ATTEMPTS,

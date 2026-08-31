@@ -3,18 +3,21 @@
 ## Local qualification
 
 The generic repository was qualified locally on macOS with host Python 3.14.7,
-Python 3.12 pinned inside its execution containers, Hermes Agent v0.19.1 at
-upstream revision `26e0b1c12c2bbc2d1ef4640df18abff2d737445a`, Docker 29, and an
+Python 3.12 pinned inside its execution containers, Hermes Agent v0.20.6 at
+source revision `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`, Docker 29, and an
 ARM64 Docker engine. This is the tested revision, not a claim that every build
 reporting the same semantic version is equivalent.
 
-The current local release checks cover 62 controller/adapter tests and:
+The current local release checks cover 77 controller/adapter tests and:
 
 - controller and adapter unit tests;
 - effective-policy dump output and CLI JSON parsing;
 - deterministic retry, exhaustion, timeout, injection rejection, and cleanup;
 - path, symlink, binary, mode, size, digest, and artifact-tampering denial;
 - provider-environment scrubbing and scoped container cleanup;
+- exact Hermes checkout, clean-tree, `pyproject.toml`, and `uv.lock` identity;
+- per-attempt disposable Hermes profile isolation, allowlisted credential
+  bridging, exact upstream cache mounts, and fail-closed profile cleanup;
 - execution-plan binding to incident, required test, and path policy;
 - repository and controller-owned verification;
 - rejection of candidate clean exits, forged success output, crashes, timeouts,

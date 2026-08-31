@@ -17,6 +17,94 @@ SPEC.loader.exec_module(smoke)
 
 
 class HermesSandboxSmokeTests(unittest.TestCase):
+    def test_unqualified_runtime_is_rejected_before_smoke_setup(self) -> None:
+        with (
+            mock.patch.object(
+                smoke.shutil,
+                "which",
+                side_effect=lambda name: f"/mock/bin/{name}",
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "inspect_hermes_runtime",
+                return_value={
+                    "qualified": False,
+                    "problems": ["synthetic unqualified runtime"],
+                },
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "prepare_disposable_hermes_profile",
+            ) as prepare,
+            mock.patch.object(smoke, "ThreadingHTTPServer") as server,
+        ):
+            with self.assertRaisesRegex(
+                SystemExit, "Hermes runtime is not qualified"
+            ):
+                smoke.main()
+
+        prepare.assert_not_called()
+        server.assert_not_called()
+
+    def test_container_baseline_failure_precedes_smoke_setup(self) -> None:
+        with (
+            mock.patch.object(
+                smoke.shutil,
+                "which",
+                side_effect=lambda name: f"/mock/bin/{name}",
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "inspect_hermes_runtime",
+                return_value={"qualified": True, "problems": []},
+            ),
+            mock.patch.object(
+                smoke,
+                "docker_ids",
+                side_effect=RuntimeError("Docker container enumeration failed"),
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "prepare_disposable_hermes_profile",
+            ) as prepare,
+            mock.patch.object(smoke, "ThreadingHTTPServer") as server,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Docker container enumeration failed"
+            ):
+                smoke.main()
+
+        prepare.assert_not_called()
+        server.assert_not_called()
+
+    def test_server_bind_failure_precedes_smoke_profile_creation(self) -> None:
+        with (
+            mock.patch.object(
+                smoke.shutil,
+                "which",
+                side_effect=lambda name: f"/mock/bin/{name}",
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "inspect_hermes_runtime",
+                return_value={"qualified": True, "problems": []},
+            ),
+            mock.patch.object(smoke, "docker_ids", return_value=set()),
+            mock.patch.object(
+                smoke,
+                "ThreadingHTTPServer",
+                side_effect=OSError("synthetic port collision"),
+            ),
+            mock.patch.object(
+                smoke.workflow_runner,
+                "prepare_disposable_hermes_profile",
+            ) as prepare,
+        ):
+            with self.assertRaisesRegex(OSError, "synthetic port collision"):
+                smoke.main()
+
+        prepare.assert_not_called()
+
     def test_output_mount_match_requires_exact_destination_and_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "output"
@@ -76,7 +164,7 @@ class HermesSandboxSmokeTests(unittest.TestCase):
                     grace_seconds=0.5,
                 )
 
-        self.assertEqual(result, ([], [], []))
+        self.assertEqual(result, ([], [], [], []))
         mount_mock.assert_called_once_with("unrelated", output_dir)
         sleep_mock.assert_not_called()
         run_mock.assert_not_called()
@@ -122,9 +210,54 @@ class HermesSandboxSmokeTests(unittest.TestCase):
                     grace_seconds=0.5,
                 )
 
-        self.assertEqual(result, (["target"], ["target"], []))
+        self.assertEqual(result, (["target"], ["target"], [], []))
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.args[0], ["docker", "rm", "-f", "target"])
+
+    def test_cleanup_reports_container_listing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                smoke,
+                "docker_ids",
+                side_effect=RuntimeError("Docker container enumeration failed"),
+            ):
+                result = smoke.wait_and_cleanup_new_containers(
+                    set(), Path(temporary), grace_seconds=0.5
+                )
+
+        self.assertEqual(
+            result,
+            (
+                [],
+                [],
+                [],
+                ["Docker container enumeration failed"],
+            ),
+        )
+
+    def test_cleanup_reports_container_inspection_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch.object(smoke, "docker_ids", return_value={"candidate"}),
+                mock.patch.object(
+                    smoke,
+                    "container_has_output_mount",
+                    side_effect=RuntimeError("Docker container inspection failed"),
+                ),
+            ):
+                result = smoke.wait_and_cleanup_new_containers(
+                    set(), Path(temporary), grace_seconds=0.5
+                )
+
+        self.assertEqual(
+            result,
+            (
+                [],
+                [],
+                [],
+                ["Docker container inspection failed"],
+            ),
+        )
 
     def test_malformed_sandbox_proof_is_reported_without_raising(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

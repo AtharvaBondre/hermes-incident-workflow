@@ -45,9 +45,9 @@ The central rule is simple: **Hermes proposes; the controller decides.**
 - Python 3.11 or newer
 - Git
 - Docker for candidate-code tests, with Compose for optional service checks. Bootstrap the digest-pinned Python image before verification because sandbox execution uses `--pull=never`.
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) v0.19.1 only for
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) v0.20.6 only for
   the sandbox smoke test or a real-model run. Local qualification used
-  [revision `26e0b1c`](https://github.com/NousResearch/hermes-agent/commit/26e0b1c12c2bbc2d1ef4640df18abff2d737445a);
+  [revision `5fc308a`](https://github.com/NousResearch/hermes-agent/commit/5fc308a70719a83cccdbba4c0e39c23f5a8239d5);
   another build reporting the same version is not yet qualified.
 
 The deterministic fixture workflow does not require model credentials or a model request.
@@ -131,6 +131,13 @@ python3 scripts/hermes_sandbox_smoke.py
 ```
 
 The smoke test uses a local scripted model endpoint and makes no paid inference request. It proves that the real Hermes CLI loads the supplied skill and routes terminal work through the locked-down Docker backend.
+
+The installer accepts only the exact qualified Hermes source revision and
+lockfile digests. During each real-model attempt, the controller copies this
+public profile plus an allowlisted set of profile credential files into a
+temporary Hermes home. That prevents upstream cache, attachment, and session
+mounts from reaching the user's long-lived profile; cleanup failure blocks
+delivery.
 
 ## Use a real Hermes model
 

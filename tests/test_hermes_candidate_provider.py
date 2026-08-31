@@ -19,6 +19,44 @@ SPEC.loader.exec_module(runner)
 
 
 class HermesCandidateProviderTests(unittest.TestCase):
+    def qualified_runtime_identity(self) -> dict[str, object]:
+        return {
+            "version": runner.HERMES_REQUIRED_VERSION,
+            "revision": runner.HERMES_QUALIFIED_REVISION,
+            "checkout_clean": True,
+            "pyproject_sha256": runner.HERMES_PYPROJECT_SHA256,
+            "lock_sha256": runner.HERMES_LOCK_SHA256,
+            "qualified": True,
+            "problems": [],
+        }
+
+    @contextlib.contextmanager
+    def installed_profile_patch(
+        self,
+        root: Path,
+        runtime_identity: dict[str, object] | None = None,
+    ):
+        source_profile = root / "installed-hermes-profile"
+        source_profile.mkdir()
+        prepare = runner.prepare_disposable_hermes_profile
+        with (
+            mock.patch.object(
+                runner,
+                "prepare_disposable_hermes_profile",
+                side_effect=lambda worker_root, profile: prepare(
+                    worker_root,
+                    profile,
+                    source_profile=source_profile,
+                ),
+            ),
+            mock.patch.object(
+                runner,
+                "inspect_hermes_runtime",
+                return_value=runtime_identity or self.qualified_runtime_identity(),
+            ),
+        ):
+            yield
+
     def fixture_context(
         self, artifact_dir: Path, attempt: int = 1, feedback: list[dict] | None = None
     ) -> dict:
@@ -96,13 +134,25 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "profile": "example-profile",
                 "provider": "example-provider",
                 "model": "example-model",
+                "fresh_session": True,
+                "controller_is_sole_acceptor": True,
+                "disposable_profile": True,
+                "credential_files_bridged": [],
+                "runtime_identity": self.qualified_runtime_identity(),
                 "outcome": "CANDIDATE_RETURNED",
                 "session_id": "20260817_120000_ab12cd",
                 "patch_sha256": patch_sha256,
                 "candidate_digest": candidate_digest,
                 "cleanup": {
                     "complete": True,
+                    "observation_errors": [],
                     "remaining_container_ids": [],
+                    "profile_state": {
+                        "complete": True,
+                        "remaining": [],
+                        "removed": ["hermes_root", "launcher_home"],
+                    },
+                    "worker_directory": {"complete": True, "remaining": []},
                 },
             },
         )
@@ -247,6 +297,8 @@ class HermesCandidateProviderTests(unittest.TestCase):
             "input_dir": Path("/tmp/hiw-input"),
             "task_path": Path("/tmp/hiw-task.json"),
             "output_dir": Path("/tmp/hiw-output"),
+            "hermes_root": Path("/tmp/hiw-hermes-root"),
+            "launcher_home": Path("/tmp/hiw-launcher-home"),
         }
         with mock.patch.dict(
             os.environ,
@@ -267,6 +319,64 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     self.assertNotIn("AZURE_OPENAI_API_KEY", environment)
                     self.assertNotIn("OPENAI_API_KEY", environment)
                     self.assertNotIn("GITHUB_TOKEN", environment)
+                    self.assertEqual(
+                        environment["HOME"], str(Path("/tmp/hiw-launcher-home").resolve())
+                    )
+                    self.assertEqual(
+                        environment["HERMES_HOME"], str(Path("/tmp/hiw-hermes-root").resolve())
+                    )
+
+    def test_disposable_profile_copies_only_allowlisted_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "installed-profile"
+            source.mkdir()
+            (source / ".env").write_text(
+                "MODEL_API_KEY=synthetic\nHERMES_HOME=/must-not-copy\n",
+                encoding="utf-8",
+            )
+            (source / "auth.json").write_text("{}\n", encoding="utf-8")
+            (source / "state.db").write_text("must-not-copy\n", encoding="utf-8")
+            (source / "logs").mkdir()
+            (source / "logs" / "agent.log").write_text("must-not-copy\n", encoding="utf-8")
+
+            prepared = runner.prepare_disposable_hermes_profile(
+                root / "worker",
+                runner.HERMES_PROFILE,
+                source_profile=source,
+            )
+            profile = prepared["profile_dir"]
+            self.assertEqual(prepared["credential_files"], [".env", "auth.json"])
+            self.assertEqual((profile / ".env").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                (profile / ".env").read_text(encoding="utf-8"),
+                "MODEL_API_KEY=synthetic\n",
+            )
+            self.assertFalse((profile / "state.db").exists())
+            self.assertFalse((profile / "logs").exists())
+            self.assertTrue(all((profile / item).is_dir() for item in runner.HERMES_CACHE_DIRECTORIES))
+
+            cleanup = runner.cleanup_disposable_hermes_profile(prepared)
+            self.assertTrue(cleanup["complete"])
+            self.assertFalse(prepared["hermes_root"].exists())
+            self.assertFalse(prepared["launcher_home"].exists())
+
+    def test_disposable_profile_rejects_symlinked_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "installed-profile"
+            source.mkdir()
+            target = root / "credential-target"
+            target.write_text("MODEL_API_KEY=synthetic\n", encoding="utf-8")
+            (source / ".env").symlink_to(target)
+
+            with self.assertRaisesRegex(runner.PolicyDenied, "safe regular file"):
+                runner.prepare_disposable_hermes_profile(
+                    root / "worker",
+                    runner.HERMES_PROFILE,
+                    source_profile=source,
+                )
+            self.assertFalse((root / "worker" / "hermes-home").exists())
 
     def test_proposal_parser_is_strict_and_attempt_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -383,6 +493,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 ),
                 mock.patch.object(runner, "run_hermes_process", side_effect=invoke),
                 mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(Path(temporary)),
                 mock.patch.object(
                     runner,
                     "cleanup_hermes_containers",
@@ -414,6 +525,12 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
             self.assertEqual(execution["outcome"], "CANDIDATE_RETURNED")
             self.assertTrue(execution["cleanup"]["complete"])
+            self.assertTrue(execution["cleanup"]["profile_state"]["complete"])
+            self.assertTrue(execution["cleanup"]["worker_directory"]["complete"])
+            environment = observed["environment"]
+            self.assertNotIn("OPENAI_API_KEY", environment)
+            self.assertFalse(Path(environment["HERMES_HOME"]).exists())
+            self.assertFalse(Path(environment["HOME"]).exists())
             command = observed["args"]
             self.assertEqual(command[command.index("-p") + 1], runner.HERMES_PROFILE)
             self.assertIn("--provider", command)
@@ -423,6 +540,185 @@ class HermesCandidateProviderTests(unittest.TestCase):
             self.assertIn("--skills", command)
             self.assertIn("hermes-incident-remediation", command)
             self.assertNotIn("--resume", command)
+
+    def test_real_provider_rejects_unqualified_runtime_before_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary) / "run"
+            artifact_dir.mkdir()
+            workspace = runner.create_workspace(artifact_dir, "attempt-1")
+            provider = runner.HermesCandidateProvider(
+                provider="example-provider",
+                model="example-model",
+            )
+            unqualified = self.qualified_runtime_identity()
+            unqualified.update(
+                {
+                    "revision": "0" * 40,
+                    "qualified": False,
+                    "problems": ["Hermes source checkout revision is not qualified"],
+                }
+            )
+
+            with (
+                mock.patch.object(
+                    runner.shutil,
+                    "which",
+                    side_effect=lambda name: f"/mock/bin/{name}",
+                ),
+                mock.patch.object(runner, "run_hermes_process") as invoke,
+                mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(
+                    Path(temporary), runtime_identity=unqualified
+                ),
+                mock.patch.object(
+                    runner,
+                    "cleanup_hermes_containers",
+                    return_value={
+                        "scoped_container_ids": [],
+                        "removed_container_ids": [],
+                        "remaining_container_ids": [],
+                        "complete": True,
+                    },
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runner.PolicyDenied, "failed qualification immediately before execution"
+                ):
+                    provider.create_candidate(
+                        attempt=1,
+                        workspace=workspace,
+                        deadline=time.monotonic() + 30,
+                        request=self.fixture_context(artifact_dir),
+                    )
+
+            invoke.assert_not_called()
+            execution = runner.read_json(
+                artifact_dir / "attempt-1-hermes-execution.json"
+            )
+            self.assertEqual(execution["outcome"], "FAILED")
+            self.assertFalse(execution["runtime_identity"]["qualified"])
+            self.assertTrue(execution["cleanup"]["complete"])
+
+    def test_real_provider_rejects_missing_container_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary) / "run"
+            artifact_dir.mkdir()
+            workspace = runner.create_workspace(artifact_dir, "attempt-1")
+            provider = runner.HermesCandidateProvider(
+                provider="example-provider",
+                model="example-model",
+            )
+
+            with (
+                mock.patch.object(
+                    runner.shutil,
+                    "which",
+                    side_effect=lambda name: f"/mock/bin/{name}",
+                ),
+                mock.patch.object(
+                    runner,
+                    "hermes_container_ids",
+                    side_effect=runner.FlowError(
+                        "Docker container enumeration failed"
+                    ),
+                ),
+                mock.patch.object(
+                    runner, "prepare_disposable_hermes_profile"
+                ) as prepare,
+                mock.patch.object(runner, "run_hermes_process") as invoke,
+            ):
+                with self.assertRaisesRegex(
+                    runner.FlowError, "Docker container enumeration failed"
+                ):
+                    provider.create_candidate(
+                        attempt=1,
+                        workspace=workspace,
+                        deadline=time.monotonic() + 30,
+                        request=self.fixture_context(artifact_dir),
+                    )
+
+            prepare.assert_not_called()
+            invoke.assert_not_called()
+            execution = runner.read_json(
+                artifact_dir / "attempt-1-hermes-execution.json"
+            )
+            self.assertEqual(execution["outcome"], "FAILED")
+            self.assertFalse(execution["cleanup"]["complete"])
+            self.assertEqual(
+                execution["cleanup"]["observation_errors"],
+                ["initial Docker container baseline is unavailable"],
+            )
+
+    def test_disposable_profile_cleanup_failure_blocks_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary) / "run"
+            artifact_dir.mkdir()
+            workspace = runner.create_workspace(artifact_dir, "attempt-1")
+            provider = runner.HermesCandidateProvider(
+                provider="example-provider",
+                model="example-model",
+            )
+
+            def invoke(args, *, cwd, environment, timeout):
+                del cwd, timeout
+                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                subject = sandbox / "app" / "subject.py"
+                subject.write_text(
+                    subject.read_text(encoding="utf-8").replace(
+                        "    return value.strip()\n",
+                        '    return " ".join(value.split()).lower()\n',
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    "candidate ready\n",
+                    "\nsession_id: 20260817_120000_ab12cd\n",
+                )
+
+            with (
+                mock.patch.object(
+                    runner.shutil,
+                    "which",
+                    side_effect=lambda name: f"/mock/bin/{name}",
+                ),
+                mock.patch.object(runner, "run_hermes_process", side_effect=invoke),
+                mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(Path(temporary)),
+                mock.patch.object(
+                    runner,
+                    "cleanup_hermes_containers",
+                    return_value={
+                        "scoped_container_ids": [],
+                        "removed_container_ids": [],
+                        "remaining_container_ids": [],
+                        "complete": True,
+                    },
+                ),
+                mock.patch.object(
+                    runner,
+                    "cleanup_disposable_hermes_profile",
+                    return_value={
+                        "removed": ["launcher_home"],
+                        "remaining": ["hermes_root"],
+                        "complete": False,
+                    },
+                ),
+            ):
+                with self.assertRaisesRegex(runner.FlowError, "attempt cleanup"):
+                    provider.create_candidate(
+                        attempt=1,
+                        workspace=workspace,
+                        deadline=time.monotonic() + 30,
+                        request=self.fixture_context(artifact_dir),
+                    )
+
+            execution = runner.read_json(
+                artifact_dir / "attempt-1-hermes-execution.json"
+            )
+            self.assertEqual(execution["outcome"], "FAILED")
+            self.assertFalse(execution["cleanup"]["complete"])
 
     def test_stdout_success_without_patch_is_rejected_without_applying(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -448,6 +744,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 ),
                 mock.patch.object(runner, "run_hermes_process", return_value=completed),
                 mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(Path(temporary)),
                 mock.patch.object(
                     runner,
                     "cleanup_hermes_containers",
@@ -511,6 +808,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 ),
                 mock.patch.object(runner, "run_hermes_process", side_effect=invoke),
                 mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(Path(temporary)),
                 mock.patch.object(
                     runner,
                     "cleanup_hermes_containers",
@@ -568,8 +866,50 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         self.assertTrue(result["complete"])
         self.assertEqual(result["removed_container_ids"], ["target"])
+        self.assertEqual(result["observation_errors"], [])
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.args[0], ["docker", "rm", "-f", "target"])
+
+    def test_cleanup_fails_closed_when_container_listing_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                runner,
+                "hermes_container_ids",
+                side_effect=runner.FlowError("Docker container enumeration failed"),
+            ):
+                result = runner.cleanup_hermes_containers(
+                    set(), Path(temporary), grace_seconds=0
+                )
+
+        self.assertFalse(result["complete"])
+        self.assertEqual(
+            result["observation_errors"],
+            ["Docker container enumeration failed"],
+        )
+
+    def test_cleanup_fails_closed_when_container_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch.object(
+                    runner, "hermes_container_ids", return_value={"candidate"}
+                ),
+                mock.patch.object(
+                    runner,
+                    "hermes_container_has_output_mount",
+                    side_effect=runner.FlowError(
+                        "Docker container inspection failed"
+                    ),
+                ),
+            ):
+                result = runner.cleanup_hermes_containers(
+                    set(), Path(temporary), grace_seconds=0
+                )
+
+        self.assertFalse(result["complete"])
+        self.assertEqual(
+            result["observation_errors"],
+            ["Docker container inspection failed"],
+        )
 
     def test_timeout_terminates_the_fresh_hermes_process_group(self) -> None:
         process = mock.Mock(pid=4321, returncode=-15)
@@ -650,6 +990,9 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     "profile": "bad profile",
                     "provider": "",
                     "model": "bad model",
+                    "disposable_profile": False,
+                    "credential_files_bridged": ["../../secret"],
+                    "runtime_identity": {"qualified": False},
                     "patch_sha256": "0" * 64,
                     "candidate_digest": "1" * 64,
                     "cleanup": {"complete": False},
@@ -678,6 +1021,9 @@ class HermesCandidateProviderTests(unittest.TestCase):
             "Hermes execution profile is invalid",
             "Hermes execution provider is invalid",
             "Hermes execution model is invalid",
+            "Hermes execution did not use a disposable profile",
+            "Hermes execution runtime identity is not qualified",
+            "Hermes execution credential bridge is invalid",
             "Hermes execution cleanup did not complete",
             "Hermes execution patch SHA does not match candidate",
             "Hermes execution digest does not match candidate",
@@ -766,15 +1112,130 @@ class HermesCandidateProviderTests(unittest.TestCase):
         )
         self.assertIs(run_flow.call_args.kwargs["candidate_provider"], provider)
 
+    def test_runtime_identity_uses_checkout_and_lock_digests(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            install_root = Path(temporary) / "hermes-agent"
+            install_root.mkdir()
+            pyproject = install_root / "pyproject.toml"
+            lock = install_root / "uv.lock"
+            pyproject.write_text("qualified project\n", encoding="utf-8")
+            lock.write_text("qualified lock\n", encoding="utf-8")
+            pyproject_digest = runner.hashlib.sha256(pyproject.read_bytes()).hexdigest()
+            lock_digest = runner.hashlib.sha256(lock.read_bytes()).hexdigest()
+
+            def command(args, **_):
+                if args == ["hermes", "--version"]:
+                    return subprocess.CompletedProcess(
+                        args,
+                        0,
+                        (
+                            "Hermes Agent v0.20.6 (test) · upstream moving123\n"
+                            f"Install directory: {install_root}\n"
+                        ),
+                        "",
+                    )
+                if args[-2:] == ["rev-parse", "HEAD"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, runner.HERMES_QUALIFIED_REVISION + "\n", ""
+                    )
+                if "status" in args:
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                raise AssertionError(f"unexpected command: {args}")
+
+            with (
+                mock.patch.object(runner, "command", side_effect=command),
+                mock.patch.object(runner, "HERMES_PYPROJECT_SHA256", pyproject_digest),
+                mock.patch.object(runner, "HERMES_LOCK_SHA256", lock_digest),
+            ):
+                identity = runner.inspect_hermes_runtime()
+
+        self.assertTrue(identity["qualified"])
+        self.assertEqual(identity["revision"], runner.HERMES_QUALIFIED_REVISION)
+        self.assertTrue(identity["checkout_clean"])
+
+    def test_runtime_identity_rejects_dirty_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            install_root = Path(temporary) / "hermes-agent"
+            install_root.mkdir()
+            (install_root / "pyproject.toml").write_text("changed\n", encoding="utf-8")
+            (install_root / "uv.lock").write_text("changed\n", encoding="utf-8")
+
+            def command(args, **_):
+                if args == ["hermes", "--version"]:
+                    return subprocess.CompletedProcess(
+                        args,
+                        0,
+                        f"Hermes Agent v0.20.6\nInstall directory: {install_root}\n",
+                        "",
+                    )
+                if args[-2:] == ["rev-parse", "HEAD"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, runner.HERMES_QUALIFIED_REVISION + "\n", ""
+                    )
+                if "status" in args:
+                    return subprocess.CompletedProcess(args, 0, " M pyproject.toml\n", "")
+                raise AssertionError(f"unexpected command: {args}")
+
+            with mock.patch.object(runner, "command", side_effect=command):
+                identity = runner.inspect_hermes_runtime()
+
+        self.assertFalse(identity["qualified"])
+        self.assertIn(
+            "Hermes source checkout has tracked or untracked changes",
+            identity["problems"],
+        )
+
+    def test_runtime_identity_rejects_untracked_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            install_root = Path(temporary) / "hermes-agent"
+            install_root.mkdir()
+            pyproject = install_root / "pyproject.toml"
+            lock = install_root / "uv.lock"
+            pyproject.write_text("qualified project\n", encoding="utf-8")
+            lock.write_text("qualified lock\n", encoding="utf-8")
+
+            def command(args, **_):
+                if args == ["hermes", "--version"]:
+                    return subprocess.CompletedProcess(
+                        args,
+                        0,
+                        f"Hermes Agent v0.20.6\nInstall directory: {install_root}\n",
+                        "",
+                    )
+                if args[-2:] == ["rev-parse", "HEAD"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, runner.HERMES_QUALIFIED_REVISION + "\n", ""
+                    )
+                if "status" in args:
+                    return subprocess.CompletedProcess(
+                        args, 0, "?? sitecustomize.py\n", ""
+                    )
+                raise AssertionError(f"unexpected command: {args}")
+
+            with (
+                mock.patch.object(runner, "command", side_effect=command),
+                mock.patch.object(
+                    runner,
+                    "HERMES_PYPROJECT_SHA256",
+                    runner.hashlib.sha256(pyproject.read_bytes()).hexdigest(),
+                ),
+                mock.patch.object(
+                    runner,
+                    "HERMES_LOCK_SHA256",
+                    runner.hashlib.sha256(lock.read_bytes()).hexdigest(),
+                ),
+            ):
+                identity = runner.inspect_hermes_runtime()
+
+        self.assertFalse(identity["qualified"])
+        self.assertFalse(identity["checkout_clean"])
+        self.assertIn(
+            "Hermes source checkout has tracked or untracked changes",
+            identity["problems"],
+        )
+
     def test_preflight_checks_the_selected_hermes_profile(self) -> None:
         def command(args, **_):
-            if args == ["hermes", "--version"]:
-                return subprocess.CompletedProcess(
-                    args,
-                    0,
-                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n",
-                    "",
-                )
             if args == ["hermes", "profile", "info", "example-profile"]:
                 return subprocess.CompletedProcess(args, 0, "profile available\n", "")
             raise AssertionError(f"unexpected command: {args}")
@@ -782,6 +1243,15 @@ class HermesCandidateProviderTests(unittest.TestCase):
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(
+                runner,
+                "inspect_hermes_runtime",
+                return_value={
+                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "qualified": True,
+                    "problems": [],
+                },
+            ),
             mock.patch.object(runner, "command", side_effect=command),
         ):
             result = runner.preflight(False, True, "example-profile")
@@ -796,18 +1266,23 @@ class HermesCandidateProviderTests(unittest.TestCase):
         def command(args, **_):
             return subprocess.CompletedProcess(
                 args,
-                0 if args == ["hermes", "--version"] else 1,
-                (
-                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n"
-                    if "--version" in args
-                    else ""
-                ),
+                1,
+                "",
                 "",
             )
 
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(
+                runner,
+                "inspect_hermes_runtime",
+                return_value={
+                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "qualified": True,
+                    "problems": [],
+                },
+            ),
             mock.patch.object(runner, "command", side_effect=command),
         ):
             result = runner.preflight(False, True, "missing-profile")
@@ -818,13 +1293,6 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
     def test_preflight_rejects_unqualified_hermes_revision(self) -> None:
         def command(args, **_):
-            if args == ["hermes", "--version"]:
-                return subprocess.CompletedProcess(
-                    args,
-                    0,
-                    "Hermes Agent v0.19.1 (test) · upstream deadbeef\n",
-                    "",
-                )
             if args == ["hermes", "profile", "info", "example-profile"]:
                 return subprocess.CompletedProcess(args, 0, "profile available\n", "")
             raise AssertionError(f"unexpected command: {args}")
@@ -832,24 +1300,29 @@ class HermesCandidateProviderTests(unittest.TestCase):
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(
+                runner,
+                "inspect_hermes_runtime",
+                return_value={
+                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "qualified": False,
+                    "problems": [
+                        "Hermes source checkout is not qualified revision "
+                        + runner.HERMES_QUALIFIED_REVISION
+                    ],
+                },
+            ),
             mock.patch.object(runner, "command", side_effect=command),
         ):
             result = runner.preflight(False, True, "example-profile")
 
         self.assertFalse(result["ok"])
         self.assertTrue(
-            any("qualified upstream revision 26e0b1c1" in item for item in result["problems"])
+            any(runner.HERMES_QUALIFIED_REVISION in item for item in result["problems"])
         )
 
     def test_preflight_rejects_failed_hermes_version_command(self) -> None:
         def command(args, **_):
-            if args == ["hermes", "--version"]:
-                return subprocess.CompletedProcess(
-                    args,
-                    1,
-                    "Hermes Agent v0.19.1 (test) · upstream 26e0b1c1\n",
-                    "version lookup failed",
-                )
             if args == ["hermes", "profile", "info", "example-profile"]:
                 return subprocess.CompletedProcess(args, 0, "profile available\n", "")
             raise AssertionError(f"unexpected command: {args}")
@@ -857,6 +1330,15 @@ class HermesCandidateProviderTests(unittest.TestCase):
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
+            mock.patch.object(
+                runner,
+                "inspect_hermes_runtime",
+                return_value={
+                    "version_line": "unknown",
+                    "qualified": False,
+                    "problems": ["Hermes version command failed"],
+                },
+            ),
             mock.patch.object(runner, "command", side_effect=command),
         ):
             result = runner.preflight(False, True, "example-profile")
