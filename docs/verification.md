@@ -8,7 +8,7 @@ upstream revision `26e0b1c12c2bbc2d1ef4640df18abff2d737445a`, Docker 29, and an
 ARM64 Docker engine. This is the tested revision, not a claim that every build
 reporting the same semantic version is equivalent.
 
-The current local release checks cover 60 controller/adapter tests and:
+The current local release checks cover 62 controller/adapter tests and:
 
 - controller and adapter unit tests;
 - effective-policy dump output and CLI JSON parsing;
