@@ -21,6 +21,32 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         return temporary, Path(temporary.name)
 
+    def test_preflight_with_docker_requires_pinned_candidate_image(self) -> None:
+        def execute(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if args[:3] == ["docker", "image", "inspect"]:
+                return subprocess.CompletedProcess(args, 1, "", "missing")
+            if args[:2] == ["docker", "info"]:
+                return subprocess.CompletedProcess(args, 0, "29.0.0|arm64\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        def executable(name: str) -> str | None:
+            if name == "hermes":
+                return None
+            return f"/usr/bin/{name}"
+
+        with (
+            mock.patch.object(runner.shutil, "which", side_effect=executable),
+            mock.patch.object(runner, "command", side_effect=execute),
+        ):
+            result = runner.preflight(with_docker=True)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "pinned candidate test image is unavailable; run "
+            "./scripts/bootstrap-pinned-images.sh sandbox",
+            result["problems"],
+        )
+
     def test_retry_success_publishes_only_after_second_candidate(self) -> None:
         temporary, artifacts = self.artifact_root()
         self.addCleanup(temporary.cleanup)

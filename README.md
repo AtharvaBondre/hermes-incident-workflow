@@ -142,10 +142,14 @@ delivery.
 ## Use a real Hermes model
 
 Follow [Hermes model setup](docs/model-setup.md) to install the qualified
-version, install this repository's isolated profile, and configure provider
+version, install this repository's disposable workflow profile, and configure provider
 authentication through Hermes' profile-scoped credential store. Do not place
 provider credentials in project files, `.env` files, command arguments, or
 exported environment variables.
+
+The disposable profile provides state hygiene, not an operating-system security
+boundary. Controller-owned policy and the network-disabled Docker terminal are
+the isolation boundary for candidate tool execution.
 
 Then opt in explicitly:
 

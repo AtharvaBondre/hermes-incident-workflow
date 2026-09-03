@@ -8,7 +8,7 @@ source revision `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`, Docker 29, and an
 ARM64 Docker engine. This is the tested revision, not a claim that every build
 reporting the same semantic version is equivalent.
 
-The current local release checks cover 77 controller/adapter tests and:
+The current local release checks cover 78 controller/adapter tests and:
 
 - controller and adapter unit tests;
 - effective-policy dump output and CLI JSON parsing;
@@ -16,8 +16,9 @@ The current local release checks cover 77 controller/adapter tests and:
 - path, symlink, binary, mode, size, digest, and artifact-tampering denial;
 - provider-environment scrubbing and scoped container cleanup;
 - exact Hermes checkout, clean-tree, `pyproject.toml`, and `uv.lock` identity;
-- per-attempt disposable Hermes profile isolation, allowlisted credential
-  bridging, exact upstream cache mounts, and fail-closed profile cleanup;
+- per-attempt disposable Hermes profile state hygiene, allowlisted credential
+  bridging, exact upstream cache mounts, fail-closed profile cleanup, and a
+  separate Docker boundary for terminal isolation;
 - execution-plan binding to incident, required test, and path policy;
 - repository and controller-owned verification;
 - rejection of candidate clean exits, forged success output, crashes, timeouts,

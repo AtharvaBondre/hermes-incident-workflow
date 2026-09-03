@@ -34,7 +34,7 @@ untracked tree, and the qualified hashes of both packaging files immediately
 before every real-model invocation. It does not trust the banner's moving
 `upstream` field.
 
-## 2. Install the isolated workflow profile
+## 2. Install the disposable workflow profile
 
 From this repository's root:
 
@@ -53,6 +53,10 @@ behavioral variables such as `HOME`, `HERMES_HOME`, `PATH`, and terminal
 settings are discarded. It never copies sessions, memories, logs, caches,
 attachments, or user configuration. The disposable home is deleted after the
 attempt, and a cleanup failure makes the candidate ineligible for delivery.
+
+This profile is a state-hygiene boundary, not an operating-system sandbox.
+Controller-owned policy and the Docker terminal restrictions below provide the
+candidate tool-execution boundary.
 
 The terminal backend remains Docker-based and network-disabled. Besides the
 read-only input, task, and skill mounts and the writable output mount, Hermes
@@ -88,6 +92,11 @@ that exist only in another CLI's home directory are intentionally unavailable
 inside the isolated launcher home. Refreshable OAuth state is disposable for
 each attempt; configure a non-expiring provider key for repeatable unattended
 workflow runs.
+
+The qualified Hermes v0.20.6 predates the Anthropic OAuth hardening published
+in [Hermes v0.21.0](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.31).
+Do not use Anthropic OAuth for unattended runs on this pin; use a provider API
+key or wait for a separately qualified Hermes upgrade.
 
 Provider and model identifiers passed to the workflow must match the values
 selected in Hermes. The available providers and models are owned by the

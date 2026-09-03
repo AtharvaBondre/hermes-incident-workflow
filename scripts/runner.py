@@ -2993,6 +2993,24 @@ def preflight(
             docker_status = result.stdout.strip()
             if result.returncode != 0:
                 problems.append("Docker daemon is not ready")
+            else:
+                image_result = command(
+                    [
+                        "docker",
+                        "image",
+                        "inspect",
+                        "--format",
+                        "{{.Id}}|{{.Architecture}}",
+                        CANDIDATE_TEST_IMAGE,
+                    ],
+                    cwd=PACKAGE_ROOT,
+                    timeout=20,
+                )
+                if image_result.returncode != 0:
+                    problems.append(
+                        "pinned candidate test image is unavailable; run "
+                        "./scripts/bootstrap-pinned-images.sh sandbox"
+                    )
             scenarios = read_json(FIXTURES / "scenarios.json")
             for scenario_name in ("retry-success", "event-indexing-collision"):
                 scenario = scenarios[scenario_name]
