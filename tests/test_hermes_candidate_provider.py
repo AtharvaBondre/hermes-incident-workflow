@@ -74,15 +74,46 @@ class HermesCandidateProviderTests(unittest.TestCase):
         )
         return {"artifact_dir": artifact_dir, "packet": packet}
 
+    def write_ready_proposal(
+        self,
+        output_dir: Path,
+        *,
+        attempt: int = 1,
+        changed_paths: list[str] | None = None,
+    ) -> None:
+        runner.write_json(
+            output_dir / "proposal.json",
+            {
+                "schema_version": 1,
+                "attempt": attempt,
+                "status": "candidate_ready",
+                "changed_paths": changed_paths or ["app/subject.py"],
+                "required_test": {
+                    "command": runner.HERMES_REQUIRED_TEST,
+                    "exit_code": 0,
+                },
+                "rationale": "Prepare the smallest bounded correction.",
+                "uncertainty": [],
+            },
+        )
+
     def verified_hermes_run(self, artifact_root: Path) -> Path:
-        patch_payload = (runner.FIXTURES / "patches" / "correct.patch").read_bytes()
+        scenarios = runner.read_json(runner.FIXTURES / "scenarios.json")
+        scenario = scenarios["event-indexing-collision"]
+        repository = runner.scenario_repository(scenario)
+        trusted_patch = runner.FIXTURES / scenario["patches"][0]
+        patch_payload = trusted_patch.read_bytes()
         patch_sha256 = runner.hashlib.sha256(patch_payload).hexdigest()
         changed_paths = runner.validate_hermes_patch_bytes(patch_payload)[1]
         digest_root = artifact_root / "digest-work"
-        digest_workspace = runner.create_workspace(digest_root, "candidate")
+        digest_workspace = runner.create_workspace(
+            digest_root,
+            "candidate",
+            repository,
+        )
         applied = runner.apply_candidate(
             digest_workspace,
-            runner.FIXTURES / "patches" / "correct.patch",
+            trusted_patch,
             time.monotonic() + 10,
         )
         candidate_digest = applied["candidate_digest"]
@@ -91,6 +122,18 @@ class HermesCandidateProviderTests(unittest.TestCase):
         run_dir = artifact_root / "hermes-run"
         run_dir.mkdir()
         patch_name = "attempt-1-hermes.patch"
+        session_id = "20260817_120000_ab12cd"
+        incident = runner.read_json(runner.FIXTURES / scenario["incident"])
+        request = runner.build_hermes_request(
+            run_id="verified-hermes-run",
+            attempt=1,
+            incident=incident,
+            evidence=runner.collect_evidence(incident),
+            feedback=[],
+            deadline=time.monotonic() + 30,
+            independent_diagnosis=False,
+            session_usage_required=True,
+        )
         trusted_test = {
             "passed": True,
             "checks": [
@@ -107,12 +150,73 @@ class HermesCandidateProviderTests(unittest.TestCase):
         runner.write_json(
             run_dir / "control.json",
             {
+                "run_id": "verified-hermes-run",
                 "attempts": 1,
+                "scenario": "event-indexing-collision",
                 "outcome": "SUCCEEDED",
                 "candidate_source": "hermes-real-model",
                 "candidate_digest": candidate_digest,
+                "issue_id": incident["issue_id"],
+                "repository": incident["repository"],
+                "base_revision": incident["base_revision"],
             },
         )
+        (run_dir / "events.jsonl").write_text(
+            json.dumps(
+                {"event": "RECEIVED", "scenario": "event-indexing-collision"}
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "event": "PATCHING",
+                    "attempt": 1,
+                    "candidate_source": "hermes-real-model",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        runner.write_json(run_dir / "attempt-1-request.json", request)
+        runner.write_json(run_dir / "attempt-1-hermes-request.json", request)
+        usage = {
+            "schema_version": 1,
+            "available": True,
+            "session_id": session_id,
+            "api_call_count": 1,
+            "input_tokens": 10,
+            "cache_read_tokens": 20,
+            "cache_write_tokens": 5,
+            "output_tokens": 4,
+            "reasoning_tokens": 1,
+            "total_tokens": 39,
+            "reasoning_tokens_are_subset_of_output": True,
+            "estimated_cost_usd": None,
+            "actual_cost_usd": None,
+            "routes": [
+                {
+                    "session_id": session_id,
+                    "model": "example-model",
+                    "billing_provider": "example-provider",
+                    "billing_mode": "provider",
+                    "task": "candidate",
+                    "api_call_count": 1,
+                    "input_tokens": 10,
+                    "cache_read_tokens": 20,
+                    "cache_write_tokens": 5,
+                    "output_tokens": 4,
+                    "reasoning_tokens": 1,
+                    "total_tokens": 39,
+                    "estimated_cost_usd": None,
+                    "actual_cost_usd": None,
+                    "cost_status": "unknown",
+                    "cost_source": "none",
+                }
+            ],
+        }
+        runner.write_json(run_dir / "attempt-1-hermes-usage.json", usage)
+        usage_sha256 = runner.hashlib.sha256(
+            (run_dir / "attempt-1-hermes-usage.json").read_bytes()
+        ).hexdigest()
         runner.write_json(
             run_dir / "attempt-1-candidate.json",
             {
@@ -136,15 +240,34 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "model": "example-model",
                 "fresh_session": True,
                 "controller_is_sole_acceptor": True,
+                "strict_proposal_required": True,
+                "session_usage_required": True,
                 "disposable_profile": True,
                 "credential_files_bridged": [],
                 "runtime_identity": self.qualified_runtime_identity(),
                 "outcome": "CANDIDATE_RETURNED",
-                "session_id": "20260817_120000_ab12cd",
+                "session_id": session_id,
+                "proposal": {
+                    "schema_version": 1,
+                    "attempt": 1,
+                    "status": "candidate_ready",
+                    "changed_paths": changed_paths,
+                    "required_test": {
+                        "command": runner.HERMES_REQUIRED_TEST,
+                        "exit_code": 0,
+                    },
+                    "rationale": "Prepare the smallest bounded correction.",
+                    "uncertainty": [],
+                },
+                "proposal_paths_match_patch": True,
+                "usage_artifact": "attempt-1-hermes-usage.json",
+                "usage_sha256": usage_sha256,
                 "patch_sha256": patch_sha256,
                 "candidate_digest": candidate_digest,
                 "cleanup": {
                     "complete": True,
+                    "scoped_container_ids": [],
+                    "removed_container_ids": [],
                     "observation_errors": [],
                     "remaining_container_ids": [],
                     "profile_state": {
@@ -160,6 +283,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             run_dir / "attempt-1-result.json",
             {
                 "attempt": 1,
+                "baseline_digest": runner.tree_digest(repository),
                 "candidate_digest": candidate_digest,
                 "test": trusted_test,
             },
@@ -186,7 +310,19 @@ class HermesCandidateProviderTests(unittest.TestCase):
             },
         )
         runner.write_json(run_dir / "mock-slack.json", {"kind": "mock_slack_delivery"})
-        runner.write_json(run_dir / "closeout.json", {"cleanup_complete": True})
+        runner.write_json(
+            run_dir / "closeout.json",
+            {
+                "cleanup_complete": True,
+                "evidence_complete": True,
+                "evidence_manifest": runner.EVIDENCE_MANIFEST_NAME,
+            },
+        )
+        runner.write_json(
+            run_dir / "hermes-usage-summary.json",
+            runner.aggregate_hermes_usage(run_dir),
+        )
+        runner.write_evidence_manifest(run_dir)
         return run_dir
 
     def test_request_packet_is_redacted_bounded_and_controller_owned(self) -> None:
@@ -224,12 +360,239 @@ class HermesCandidateProviderTests(unittest.TestCase):
             len(packet["feedback"][-1]["output"]),
             runner.MAX_HERMES_FEEDBACK_OUTPUT,
         )
-        self.assertNotIn("allowed_paths", packet["incident"])
+        self.assertEqual(packet["incident"]["allowed_paths"], ["app/subject.py"])
         self.assertNotIn("required_test_command", packet["incident"])
         self.assertEqual(
             packet["policy"]["allowed_paths"],
-            list(runner.ALLOWED_PATCH_PREFIXES),
+            ["app/subject.py"],
         )
+
+    def test_independent_diagnosis_omits_prior_diagnosis_and_plan(self) -> None:
+        incident = runner.read_json(
+            runner.FIXTURES / "incidents" / "retry-success.json"
+        )
+        packet = runner.build_hermes_request(
+            run_id="independent-diagnosis",
+            attempt=1,
+            incident=incident,
+            evidence=runner.collect_evidence(incident),
+            feedback=[],
+            deadline=time.monotonic() + 30,
+            independent_diagnosis=True,
+        )
+
+        self.assertTrue(packet["policy"]["independent_diagnosis"])
+        self.assertNotIn("diagnosis", packet)
+        self.assertNotIn("controller_approved_execution_plan", packet)
+        with self.assertRaisesRegex(runner.PolicyDenied, "independent diagnosis"):
+            runner.build_hermes_request(
+                run_id="independent-diagnosis",
+                attempt=1,
+                incident=incident,
+                evidence=runner.collect_evidence(incident),
+                feedback=[],
+                deadline=time.monotonic() + 30,
+                diagnosis={"summary": "untrusted prior conclusion"},
+                independent_diagnosis=True,
+            )
+
+    def test_incident_allowlist_must_equal_the_trusted_scenario_policy(self) -> None:
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
+            "retry-success"
+        ]
+        runner.validate_scenario_candidate_paths(
+            scenario,
+            ["app/subject.py"],
+            ["app/subject.py"],
+        )
+        with self.assertRaisesRegex(runner.PolicyDenied, "trusted scenario policy"):
+            runner.validate_scenario_candidate_paths(
+                scenario,
+                [],
+                ["app/other.py"],
+            )
+        with self.assertRaisesRegex(runner.PolicyDenied, "incident policy"):
+            runner.validate_incident_path_allowlist(
+                ["app/other.py"],
+                ["app/subject.py"],
+            )
+
+    def test_usage_preserves_exact_buckets_and_unknown_cost(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hermes_root = Path(temporary) / "hermes-root"
+            database = runner.hermes_profile_state_path(
+                "example-profile",
+                hermes_root=hermes_root,
+            )
+            database.parent.mkdir(parents=True)
+            connection = runner.sqlite3.connect(database)
+            connection.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    parent_session_id TEXT,
+                    pricing_version TEXT
+                );
+                CREATE TABLE session_model_usage (
+                    session_id TEXT,
+                    model TEXT,
+                    billing_provider TEXT,
+                    billing_mode TEXT,
+                    task TEXT,
+                    api_call_count INTEGER,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    cache_read_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    estimated_cost_usd REAL,
+                    actual_cost_usd REAL,
+                    cost_status TEXT,
+                    cost_source TEXT
+                );
+                """
+            )
+            session_id = "20260910_120000_abcdef"
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, NULL, NULL)",
+                (session_id,),
+            )
+            connection.execute(
+                "INSERT INTO session_model_usage VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    "example-model",
+                    "example-provider",
+                    "provider",
+                    "candidate",
+                    2,
+                    100,
+                    20,
+                    300,
+                    7,
+                    5,
+                    0.0,
+                    0.0,
+                    "unknown",
+                    "none",
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            usage = runner.read_hermes_session_usage(
+                "example-profile",
+                session_id,
+                hermes_root=hermes_root,
+            )
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            runner.write_json(run_dir / "attempt-1-hermes-usage.json", usage)
+            summary = runner.aggregate_hermes_usage(run_dir)
+
+        self.assertTrue(usage["available"])
+        self.assertEqual(usage["input_tokens"], 100)
+        self.assertEqual(usage["cache_read_tokens"], 300)
+        self.assertEqual(usage["cache_write_tokens"], 7)
+        self.assertEqual(usage["output_tokens"], 20)
+        self.assertEqual(usage["reasoning_tokens"], 5)
+        self.assertEqual(usage["total_tokens"], 427)
+        self.assertTrue(usage["reasoning_tokens_are_subset_of_output"])
+        self.assertIsNone(usage["estimated_cost_usd"])
+        self.assertIsNone(usage["actual_cost_usd"])
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["total_tokens"], 427)
+        self.assertIsNone(summary["estimated_cost_usd"])
+        self.assertEqual(
+            runner._reported_cost(0.0, status="included", source="none"),
+            0.0,
+        )
+        self.assertIsNone(
+            runner._reported_cost(0.0, status="unknown", source="none")
+        )
+
+    def test_manifest_hashes_only_sanitized_allowlisted_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            runner.write_json(run_dir / "control.json", {"state": "CLOSED"})
+            runner.write_json(
+                run_dir / "closeout.json",
+                {"cleanup_complete": True, "evidence_manifest": runner.EVIDENCE_MANIFEST_NAME},
+            )
+            manifest = runner.write_evidence_manifest(run_dir)
+
+            self.assertEqual(runner.verify_evidence_manifest(run_dir), [])
+            self.assertEqual(
+                [record["path"] for record in manifest["files"]],
+                ["closeout.json", "control.json"],
+            )
+            runner.write_json(run_dir / "control.json", {"state": "TAMPERED"})
+            self.assertTrue(
+                any(
+                    "manifest" in issue and "control.json" in issue
+                    for issue in runner.verify_evidence_manifest(run_dir)
+                )
+            )
+
+            runner.write_evidence_manifest(run_dir)
+            (run_dir / "debug.log").write_text("not proof\n", encoding="utf-8")
+            self.assertIn(
+                "unexpected retained artifact: debug.log",
+                runner.verify_evidence_manifest(run_dir),
+            )
+
+    def test_manifest_failure_revokes_delivery_and_marks_terminal_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            control = {
+                "run_id": "manifest-failure",
+                "issue_id": "DEMO-001",
+                "outcome": "SUCCEEDED",
+                "attempts": 1,
+                "cleanup_complete": False,
+            }
+            runner.write_json(run_dir / "control.json", control)
+            runner.write_json(
+                run_dir / "attempt-1-result.json",
+                {"output": str(runner.PACKAGE_ROOT / "private")},
+            )
+            runner.write_json(run_dir / "mock-github.json", {"draft": True})
+            runner.mock_notify(run_dir, control)
+
+            closeout = runner.closeout(run_dir, control, [])
+
+            self.assertEqual(control["state"], "EVIDENCE_FAILED")
+            self.assertEqual(control["outcome"], "FAILED")
+            self.assertFalse(closeout["evidence_complete"])
+            self.assertIsNone(closeout["evidence_manifest"])
+            self.assertFalse((run_dir / runner.EVIDENCE_MANIFEST_NAME).exists())
+            self.assertFalse((run_dir / "mock-github.json").exists())
+            self.assertEqual(
+                runner.read_json(run_dir / "mock-slack.json")["outcome"],
+                "FAILED",
+            )
+
+    def test_retained_output_redacts_package_and_home_paths(self) -> None:
+        package_path = str(runner.PACKAGE_ROOT / "fixtures" / "evidence.json")
+        home_path = str(Path.home() / "outside-package" / "example.txt")
+        redacted = runner.redact_text(f"package={package_path} home={home_path}")
+
+        self.assertNotIn(str(runner.PACKAGE_ROOT), redacted)
+        self.assertNotIn(str(Path.home()), redacted)
+        self.assertIn("<package>/fixtures/evidence.json", redacted)
+        self.assertIn("<home>/outside-package/example.txt", redacted)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "control.json"
+            artifact.write_text(package_path, encoding="utf-8")
+            self.assertEqual(
+                runner.retained_artifact_privacy_issues([artifact]),
+                ["local absolute path retained in control.json"],
+            )
 
     def test_execution_plan_is_bound_to_incident_test_and_path_policy(self) -> None:
         incident = runner.read_json(
@@ -354,7 +717,12 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
             self.assertFalse((profile / "state.db").exists())
             self.assertFalse((profile / "logs").exists())
-            self.assertTrue(all((profile / item).is_dir() for item in runner.HERMES_CACHE_DIRECTORIES))
+            self.assertTrue(
+                all(
+                    (profile / item).is_dir()
+                    for item in runner.HERMES_CACHE_DIRECTORIES
+                )
+            )
 
             cleanup = runner.cleanup_disposable_hermes_profile(prepared)
             self.assertTrue(cleanup["complete"])
@@ -402,6 +770,33 @@ class HermesCandidateProviderTests(unittest.TestCase):
             proposal["unexpected"] = True
             runner.write_json(proposal_path, proposal)
             with self.assertRaisesRegex(runner.PolicyDenied, "fields"):
+                runner.parse_hermes_proposal(proposal_path, 2)
+
+            proposal.pop("unexpected")
+            proposal["required_test"]["exit_code"] = 1
+            runner.write_json(proposal_path, proposal)
+            with self.assertRaisesRegex(runner.PolicyDenied, "failing required test"):
+                runner.parse_hermes_proposal(proposal_path, 2)
+
+            for field, value, expected_attempt in (
+                ("schema_version", True, 2),
+                ("attempt", True, 1),
+            ):
+                with self.subTest(field=field):
+                    proposal[field] = value
+                    proposal["required_test"]["exit_code"] = 0
+                    if field != "schema_version":
+                        proposal["schema_version"] = 1
+                    runner.write_json(proposal_path, proposal)
+                    with self.assertRaises(runner.PolicyDenied):
+                        runner.parse_hermes_proposal(proposal_path, expected_attempt)
+                    proposal[field] = 2 if field == "attempt" else 1
+
+            proposal["schema_version"] = 1
+            proposal["attempt"] = 2
+            proposal["required_test"]["exit_code"] = False
+            runner.write_json(proposal_path, proposal)
+            with self.assertRaisesRegex(runner.PolicyDenied, "exit code"):
                 runner.parse_hermes_proposal(proposal_path, 2)
 
     def test_patch_policy_rejects_mode_change_and_oversize(self) -> None:
@@ -541,6 +936,72 @@ class HermesCandidateProviderTests(unittest.TestCase):
             self.assertIn("hermes-incident-remediation", command)
             self.assertNotIn("--resume", command)
 
+    def test_real_provider_rejects_proposal_paths_that_differ_from_host_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_dir = Path(temporary) / "run"
+            artifact_dir.mkdir()
+            workspace = runner.create_workspace(artifact_dir, "attempt-1")
+            provider = runner.HermesCandidateProvider(
+                provider="example-provider",
+                model="example-model",
+            )
+
+            def invoke(args, *, cwd, environment, timeout):
+                del cwd, timeout
+                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                subject = sandbox / "app" / "subject.py"
+                subject.write_text(
+                    subject.read_text(encoding="utf-8").replace(
+                        "    return value.strip()\n",
+                        '    return " ".join(value.split()).lower()\n',
+                    ),
+                    encoding="utf-8",
+                )
+                self.write_ready_proposal(
+                    Path(environment["HIW_HERMES_OUTPUT"]),
+                    changed_paths=["app/different.py"],
+                )
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    "candidate ready\n",
+                    "\nsession_id: 20260817_120000_ab12cd\n",
+                )
+
+            with (
+                mock.patch.object(
+                    runner.shutil,
+                    "which",
+                    side_effect=lambda name: f"/mock/bin/{name}",
+                ),
+                mock.patch.object(runner, "run_hermes_process", side_effect=invoke),
+                mock.patch.object(runner, "hermes_container_ids", return_value=set()),
+                self.installed_profile_patch(Path(temporary)),
+                mock.patch.object(
+                    runner,
+                    "cleanup_hermes_containers",
+                    return_value={
+                        "scoped_container_ids": [],
+                        "removed_container_ids": [],
+                        "remaining_container_ids": [],
+                        "complete": True,
+                    },
+                ),
+            ):
+                with self.assertRaisesRegex(runner.PolicyDenied, "host diff"):
+                    provider.create_candidate(
+                        attempt=1,
+                        workspace=workspace,
+                        deadline=time.monotonic() + 30,
+                        request=self.fixture_context(artifact_dir),
+                    )
+
+            self.assertFalse((artifact_dir / "attempt-1-hermes.patch").exists())
+            execution = runner.read_json(
+                artifact_dir / "attempt-1-hermes-execution.json"
+            )
+            self.assertEqual(execution["outcome"], "FAILED")
+
     def test_real_provider_rejects_unqualified_runtime_before_invocation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             artifact_dir = Path(temporary) / "run"
@@ -670,6 +1131,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
+                self.write_ready_proposal(Path(environment["HIW_HERMES_OUTPUT"]))
                 return subprocess.CompletedProcess(
                     args,
                     0,
@@ -730,19 +1192,22 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 provider="example-provider",
                 model="example-model",
             )
-            completed = subprocess.CompletedProcess(
-                ["hermes"],
-                0,
-                '{"status":"success"}\n',
-                "\nsession_id: 20260817_120000_ab12cd\n",
-            )
+            def invoke(args, *, cwd, environment, timeout):
+                del cwd, timeout
+                self.write_ready_proposal(Path(environment["HIW_HERMES_OUTPUT"]))
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    '{"status":"success"}\n',
+                    "\nsession_id: 20260817_120000_ab12cd\n",
+                )
             with (
                 mock.patch.object(
                     runner.shutil,
                     "which",
                     side_effect=lambda name: f"/mock/bin/{name}",
                 ),
-                mock.patch.object(runner, "run_hermes_process", return_value=completed),
+                mock.patch.object(runner, "run_hermes_process", side_effect=invoke),
                 mock.patch.object(runner, "hermes_container_ids", return_value=set()),
                 self.installed_profile_patch(Path(temporary)),
                 mock.patch.object(
@@ -771,7 +1236,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
             self.assertEqual(execution["outcome"], "FAILED")
 
-    def test_missing_proposal_cannot_block_a_host_verified_patch(self) -> None:
+    def test_missing_proposal_blocks_a_host_derived_patch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             artifact_dir = Path(temporary) / "run"
             artifact_dir.mkdir()
@@ -820,23 +1285,22 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     },
                 ),
             ):
-                candidate = provider.create_candidate(
-                    attempt=1,
-                    workspace=workspace,
-                    deadline=time.monotonic() + 30,
-                    request=self.fixture_context(artifact_dir),
-                )
+                with self.assertRaisesRegex(
+                    runner.PolicyDenied, "did not write proposal.json"
+                ):
+                    provider.create_candidate(
+                        attempt=1,
+                        workspace=workspace,
+                        deadline=time.monotonic() + 30,
+                        request=self.fixture_context(artifact_dir),
+                    )
 
-            self.assertEqual(candidate.record["changed_paths"], ["app/subject.py"])
             execution = runner.read_json(
                 artifact_dir / "attempt-1-hermes-execution.json"
             )
-            self.assertEqual(execution["outcome"], "CANDIDATE_RETURNED")
-            self.assertIn("proposal.json", execution["proposal_validation_error"])
-            self.assertEqual(
-                execution["discarded_identical_editor_backups"],
-                ["app/subject.py.bak"],
-            )
+            self.assertEqual(execution["outcome"], "FAILED")
+            self.assertIn("proposal.json", execution["failure"])
+            self.assertFalse((artifact_dir / "attempt-1-hermes.patch").exists())
 
     def test_cleanup_removes_only_new_container_with_exact_output_mount(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -952,11 +1416,42 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             provider = RecordingFixtureProvider()
-            run_dir, control = runner.run_flow(
-                "retry-success",
-                artifact_root=Path(temporary),
-                candidate_provider=provider,
-            )
+            def independent_verify(_run_dir, _patch, digest, _deadline, **_kwargs):
+                return {
+                    "accepted": True,
+                    "candidate_digest": digest,
+                    "tested_digest": digest,
+                    "test": {
+                        "passed": True,
+                        "checks": [
+                            {
+                                "exit_code": 0,
+                                "process_exit_code": 0,
+                                "passed": True,
+                                "trusted_verifier_completed": True,
+                                "output": runner.TRUSTED_VERIFIER_COMPLETION + "\n",
+                            }
+                        ],
+                    },
+                }
+
+            with (
+                mock.patch.object(
+                    runner,
+                    "candidate_test_environment_problems",
+                    return_value=("test|arm64", []),
+                ),
+                mock.patch.object(
+                    runner,
+                    "independent_verify",
+                    side_effect=independent_verify,
+                ),
+            ):
+                run_dir, control = runner.run_flow(
+                    "retry-success",
+                    artifact_root=Path(temporary),
+                    candidate_provider=provider,
+                )
 
             self.assertEqual(control["outcome"], "SUCCEEDED")
             self.assertEqual(len(provider.requests), 2)
@@ -965,13 +1460,385 @@ class HermesCandidateProviderTests(unittest.TestCase):
             self.assertEqual(second_feedback[0]["attempt"], 1)
             self.assertEqual(second_feedback[0]["stage"], "controller_test")
             self.assertFalse(second_feedback[0]["passed"])
+            first_candidate = runner.read_json(run_dir / "attempt-1-candidate.json")
+            second_candidate = runner.read_json(run_dir / "attempt-2-candidate.json")
+            first_result = runner.read_json(run_dir / "attempt-1-result.json")
+            second_result = runner.read_json(run_dir / "attempt-2-result.json")
+            feedback = runner.read_json(run_dir / "attempt-1-feedback.json")
+            second_request = runner.read_json(run_dir / "attempt-2-request.json")
+            self.assertNotEqual(
+                first_candidate["candidate_digest"],
+                second_candidate["candidate_digest"],
+            )
+            self.assertEqual(
+                first_result["baseline_digest"],
+                second_result["baseline_digest"],
+            )
+            self.assertEqual(
+                feedback["candidate_digest"],
+                first_candidate["candidate_digest"],
+            )
+            self.assertEqual(second_request["feedback"], [feedback])
             self.assertEqual(runner.verify_run(run_dir), [])
+
+            control_path = run_dir / "control.json"
+            original_control = runner.read_json(control_path)
+            changed_control = dict(original_control)
+            changed_control["scenario"] = "exhausted"
+            runner.write_json(control_path, changed_control)
+            runner.write_evidence_manifest(run_dir)
+            scenario_issues = runner.verify_run(run_dir)
+            self.assertIn(
+                "control scenario does not match retained incident evidence",
+                scenario_issues,
+            )
+            runner.write_json(control_path, original_control)
+
+            first_result_path = run_dir / "attempt-1-result.json"
+            first_result = runner.read_json(first_result_path)
+            first_result["test"]["command"] = "forged command"
+            runner.write_json(first_result_path, first_result)
+            feedback["command"] = "forged command"
+            feedback["unexpected"] = "x" * 10_000
+            runner.write_json(run_dir / "attempt-1-feedback.json", feedback)
+            second_request["feedback"] = [feedback]
+            runner.write_json(run_dir / "attempt-2-request.json", second_request)
+            runner.write_evidence_manifest(run_dir)
+            tamper_issues = runner.verify_run(run_dir)
+            self.assertIn(
+                "retry feedback is not the exact bounded attempt-one result",
+                tamper_issues,
+            )
+            self.assertIn(
+                "attempt-1 retained test differs from independent replay",
+                tamper_issues,
+            )
+            self.assertIn(
+                "attempt-two request does not carry exact bounded attempt-one feedback",
+                tamper_issues,
+            )
+
+    def test_retry_rejects_a_fresh_workspace_that_drifted_from_baseline(self) -> None:
+        class CountingFixtureProvider(runner.FixtureCandidateProvider):
+            def __init__(self) -> None:
+                super().__init__(
+                    [
+                        runner.FIXTURES / "patches" / "incomplete.patch",
+                        runner.FIXTURES / "patches" / "correct.patch",
+                    ],
+                    repeat_last_patch=False,
+                )
+                self.calls = 0
+
+            def create_candidate(self, **kwargs):
+                self.calls += 1
+                return super().create_candidate(**kwargs)
+
+        failed_test = {
+            "command": "repository tests && controller verifier",
+            "exit_code": 1,
+            "passed": False,
+            "output": "controller-owned check failed",
+            "checks": [
+                {
+                    "command": "repository tests",
+                    "exit_code": 0,
+                    "passed": True,
+                    "output": "ok",
+                },
+                {
+                    "command": "controller verifier",
+                    "exit_code": 1,
+                    "passed": False,
+                    "output": "held-out failure",
+                },
+            ],
+        }
+        original_create_workspace = runner.create_workspace
+        workspace_calls = 0
+
+        def drifting_workspace(*args, **kwargs):
+            nonlocal workspace_calls
+            workspace_calls += 1
+            workspace = original_create_workspace(*args, **kwargs)
+            if workspace_calls == 2:
+                subject = workspace / "app" / "subject.py"
+                subject.write_text(
+                    subject.read_text(encoding="utf-8") + "\n# unexpected drift\n",
+                    encoding="utf-8",
+                )
+            return workspace
+
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = CountingFixtureProvider()
+            with (
+                mock.patch.object(
+                    runner,
+                    "candidate_test_environment_problems",
+                    return_value=("test|arm64", []),
+                ),
+                mock.patch.object(runner, "scenario_test", return_value=failed_test),
+                mock.patch.object(
+                    runner,
+                    "create_workspace",
+                    side_effect=drifting_workspace,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runner.FlowError,
+                    "fresh attempt workspace does not match the original baseline",
+                ):
+                    runner.run_flow(
+                        "retry-success",
+                        artifact_root=Path(temporary),
+                        candidate_provider=provider,
+                    )
+            run_dir = next(Path(temporary).iterdir())
+            control = runner.read_json(run_dir / "control.json")
+            self.assertEqual(control["outcome"], "REJECTED")
+            self.assertEqual(provider.calls, 1)
+            self.assertFalse((run_dir / "mock-github.json").exists())
+
+    def test_retry_verifier_recomputes_the_delivered_fixture_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ):
+                run_dir, control = runner.run_flow(
+                    "retry-success",
+                    artifact_root=Path(temporary),
+                )
+            self.assertEqual(control["outcome"], "SUCCEEDED")
+
+            forged_digest = "f" * 64
+            for name in (
+                "control.json",
+                "attempt-2-candidate.json",
+                "attempt-2-result.json",
+                "verification.json",
+                "mock-github.json",
+            ):
+                path = run_dir / name
+                record = runner.read_json(path)
+                if "candidate_digest" in record:
+                    record["candidate_digest"] = forged_digest
+                if "tested_digest" in record:
+                    record["tested_digest"] = forged_digest
+                runner.write_json(path, record)
+            runner.write_evidence_manifest(run_dir)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn("retry attempt 2 candidate digest is not reproducible", issues)
+
+    def test_retry_contract_rejects_an_early_success(self) -> None:
+        provider = runner.FixtureCandidateProvider(
+            [runner.FIXTURES / "patches" / "correct.patch"],
+            repeat_last_patch=False,
+        )
+        successful_test = {
+            "command": "repository tests && controller verifier",
+            "exit_code": 0,
+            "passed": True,
+            "output": runner.TRUSTED_VERIFIER_COMPLETION + "\n",
+            "checks": [
+                {"command": "repository tests", "exit_code": 0, "passed": True},
+                {
+                    "command": "controller verifier",
+                    "exit_code": 0,
+                    "process_exit_code": 0,
+                    "passed": True,
+                    "trusted_verifier_completed": True,
+                    "output": runner.TRUSTED_VERIFIER_COMPLETION + "\n",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch.object(
+                    runner,
+                    "candidate_test_environment_problems",
+                    return_value=("test|arm64", []),
+                ),
+                mock.patch.object(
+                    runner,
+                    "scenario_test",
+                    return_value=successful_test,
+                ),
+                mock.patch.object(runner, "independent_verify") as verify,
+            ):
+                with self.assertRaisesRegex(runner.FlowError, "got REJECTED"):
+                    runner.run_flow(
+                        "retry-success",
+                        artifact_root=Path(temporary),
+                        candidate_provider=provider,
+                    )
+            run_dir = next(Path(temporary).iterdir())
+            control = runner.read_json(run_dir / "control.json")
+
+        verify.assert_not_called()
+        self.assertEqual(control["outcome"], "REJECTED")
+        self.assertIn("held-out check", control["failure_reason"])
+        self.assertFalse((run_dir / "mock-github.json").exists())
 
     def test_verified_real_model_artifact_chain_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = self.verified_hermes_run(Path(temporary))
 
             self.assertEqual(runner.verify_run(run_dir), [])
+
+    def test_verifier_rechecks_retained_request_path_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            request_path = run_dir / "attempt-1-request.json"
+            request = runner.read_json(request_path)
+            request["incident"]["allowed_paths"] = ["app/other.py"]
+            request["run_id"] = "wrong-run"
+            request["attempt"] = 2
+            runner.write_json(request_path, request)
+
+            mounted_path = run_dir / "attempt-1-hermes-request.json"
+            mounted = runner.read_json(mounted_path)
+            mounted["run_id"] = "wrong-mounted-run"
+            mounted["attempt"] = 2
+            runner.write_json(mounted_path, mounted)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn(
+            "retained request path policy differs from trusted scenario on attempt 1",
+            issues,
+        )
+        self.assertIn("retained request run ID differs on attempt 1", issues)
+        self.assertIn("retained request attempt differs on attempt 1", issues)
+        self.assertIn("mounted request run ID differs on attempt 1", issues)
+        self.assertIn("mounted request attempt differs on attempt 1", issues)
+
+    def test_source_downgrade_cannot_bypass_hermes_patch_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            control_path = run_dir / "control.json"
+            control = runner.read_json(control_path)
+            control["candidate_source"] = "fixture-simulated-hermes"
+            runner.write_json(control_path, control)
+            candidate_path = run_dir / "attempt-1-candidate.json"
+            candidate = runner.read_json(candidate_path)
+            candidate["source"] = "fixture-simulated-hermes"
+            runner.write_json(candidate_path, candidate)
+            patch_path = run_dir / "attempt-1-hermes.patch"
+            patch_path.write_bytes(patch_path.read_bytes() + b"\n# tampered\n")
+            runner.write_evidence_manifest(run_dir)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn(
+            "Hermes artifacts disagree with the retained candidate source",
+            issues,
+        )
+        self.assertIn("Hermes candidate source is invalid on attempt 1", issues)
+        self.assertTrue(
+            "Hermes patch cannot be reapplied on attempt 1" in issues
+            or "Hermes patch SHA differs on attempt 1" in issues
+        )
+
+    def test_verifier_requires_empty_remaining_hermes_containers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            execution_path = run_dir / "attempt-1-hermes-execution.json"
+            execution = runner.read_json(execution_path)
+            execution["cleanup"]["remaining_container_ids"] = ["a" * 12]
+            execution["cleanup"]["complete"] = True
+            runner.write_json(execution_path, execution)
+            runner.write_evidence_manifest(run_dir)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn("Hermes cleanup did not complete on attempt 1", issues)
+        self.assertIn("Hermes execution cleanup did not complete", issues)
+
+    def test_verifier_recomputes_usage_bucket_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            usage_path = run_dir / "attempt-1-hermes-usage.json"
+            usage = runner.read_json(usage_path)
+            usage["total_tokens"] += usage["reasoning_tokens"]
+            runner.write_json(usage_path, usage)
+            execution_path = run_dir / "attempt-1-hermes-execution.json"
+            execution = runner.read_json(execution_path)
+            execution["usage_sha256"] = runner.hashlib.sha256(
+                usage_path.read_bytes()
+            ).hexdigest()
+            runner.write_json(execution_path, execution)
+            runner.write_json(
+                run_dir / "hermes-usage-summary.json",
+                runner.aggregate_hermes_usage(run_dir),
+            )
+            runner.write_evidence_manifest(run_dir)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn(
+            "Hermes attempt 1 usage total does not match exact token buckets",
+            issues,
+        )
+        self.assertIn(
+            "Hermes attempt 1 usage buckets do not equal the route aggregate",
+            issues,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            usage_path = run_dir / "attempt-1-hermes-usage.json"
+            usage = runner.read_json(usage_path)
+            usage["routes"] = []
+            runner.write_json(usage_path, usage)
+            execution_path = run_dir / "attempt-1-hermes-execution.json"
+            execution = runner.read_json(execution_path)
+            execution["usage_sha256"] = runner.hashlib.sha256(
+                usage_path.read_bytes()
+            ).hexdigest()
+            runner.write_json(execution_path, execution)
+            runner.write_json(
+                run_dir / "hermes-usage-summary.json",
+                runner.aggregate_hermes_usage(run_dir),
+            )
+            runner.write_evidence_manifest(run_dir)
+            empty_route_issues = runner.verify_run(run_dir)
+
+        self.assertIn("Hermes attempt 1 usage routes are invalid", empty_route_issues)
+
+    def test_verifier_reapplies_patch_before_trusting_coordinated_digests(self) -> None:
+        forged_digest = "f" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = self.verified_hermes_run(Path(temporary))
+            control_path = run_dir / "control.json"
+            control = runner.read_json(control_path)
+            control["candidate_digest"] = forged_digest
+            runner.write_json(control_path, control)
+            for name in (
+                "attempt-1-candidate.json",
+                "attempt-1-hermes-execution.json",
+                "attempt-1-result.json",
+                "verification.json",
+                "mock-github.json",
+            ):
+                path = run_dir / name
+                artifact = runner.read_json(path)
+                if "candidate_digest" in artifact:
+                    artifact["candidate_digest"] = forged_digest
+                if "tested_digest" in artifact:
+                    artifact["tested_digest"] = forged_digest
+                runner.write_json(path, artifact)
+            runner.write_evidence_manifest(run_dir)
+
+            issues = runner.verify_run(run_dir)
+
+        self.assertIn(
+            "Hermes candidate digest cannot be reproduced on attempt 1",
+            issues,
+        )
 
     def test_real_model_verifier_detects_linkage_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1242,6 +2109,11 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
             mock.patch.object(
                 runner,
@@ -1262,6 +2134,193 @@ class HermesCandidateProviderTests(unittest.TestCase):
             {"name": "example-profile", "status": "available"},
         )
 
+    def test_preflight_with_docker_requires_an_explicit_service_contract(self) -> None:
+        def executable(name: str) -> str | None:
+            return None if name == "hermes" else f"/usr/bin/{name}"
+
+        with (
+            mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ),
+            mock.patch.object(runner.shutil, "which", side_effect=executable),
+            mock.patch.object(
+                runner,
+                "service_stack_environment_problems",
+                return_value=[],
+            ),
+        ):
+            missing_scenario = runner.preflight(True)
+            missing_contract = runner.preflight(
+                True,
+                scenario_name="retry-success",
+            )
+            valid_contract = runner.preflight(
+                True,
+                scenario_name="event-indexing-collision",
+            )
+
+        self.assertIn(
+            "--with-docker requires --scenario with a service-stack contract",
+            missing_scenario["problems"],
+        )
+        self.assertIn(
+            "--with-docker requires a scenario with an explicit service-stack contract",
+            missing_contract["problems"],
+        )
+        self.assertTrue(valid_contract["ok"])
+
+    def test_service_stack_preflight_checks_every_pinned_runtime_image(self) -> None:
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
+            "event-indexing-collision"
+        ]
+        repository = runner.scenario_repository(scenario)
+        missing_image = (
+            "postgres:14.24-alpine@sha256:"
+            "727876d274666da0b92a445390ba093c84b8e9f8343e1c53cd4e9a7ab2d85310"
+        )
+
+        def command(args, **_kwargs):
+            if args[-3:] == ["config", "--format", "json"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    json.dumps(
+                        {
+                            "services": {
+                                "database": {"image": missing_image},
+                                "verifier": {
+                                    "build": {
+                                        "context": str(
+                                            runner.PACKAGE_ROOT / "docker" / "incident-poc"
+                                        ),
+                                        "dockerfile": "Dockerfile",
+                                    }
+                                },
+                            }
+                        }
+                    ),
+                    "",
+                )
+            if args[:3] == ["docker", "image", "inspect"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    1 if args[-1] == missing_image else 0,
+                    "",
+                    "",
+                )
+            raise AssertionError(f"unexpected command: {args}")
+
+        with mock.patch.object(runner, "command", side_effect=command):
+            issues = runner.service_stack_environment_problems(
+                scenario,
+                repository,
+                "hiw-preflight-test",
+            )
+
+        self.assertEqual(
+            issues,
+            [
+                f"pinned service-stack image is unavailable: {missing_image}; "
+                "run ./scripts/bootstrap-pinned-images.sh all"
+            ],
+        )
+
+        missing_service = dict(scenario)
+        missing_service["compose_service"] = "missing-verifier"
+        with mock.patch.object(runner, "command", side_effect=command):
+            issues = runner.service_stack_environment_problems(
+                missing_service,
+                repository,
+                "hiw-preflight-test",
+            )
+        self.assertEqual(
+            issues,
+            ["declared Compose verification service is missing: missing-verifier"],
+        )
+
+    def test_run_fails_before_candidate_when_pinned_image_is_unavailable(self) -> None:
+        provider = mock.Mock(source="fixture")
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=(
+                    "test|arm64",
+                    ["pinned candidate test image is unavailable"],
+                ),
+            ):
+                with self.assertRaisesRegex(runner.FlowError, "got FAILED"):
+                    runner.run_flow(
+                        "retry-success",
+                        artifact_root=Path(temporary),
+                        candidate_provider=provider,
+                    )
+            run_dir = next(Path(temporary).iterdir())
+            control = runner.read_json(run_dir / "control.json")
+
+        provider.has_candidate.assert_not_called()
+        provider.create_candidate.assert_not_called()
+        self.assertEqual(control["attempts"], 0)
+        self.assertIn("pinned candidate test image", control["failure_reason"])
+
+    def test_run_checks_service_images_before_evidence_or_candidate(self) -> None:
+        provider = mock.Mock(source="fixture")
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch.object(
+                    runner,
+                    "candidate_test_environment_problems",
+                    return_value=("test|arm64", []),
+                ),
+                mock.patch.object(
+                    runner,
+                    "service_stack_environment_problems",
+                    return_value=["pinned service-stack image is unavailable"],
+                ),
+            ):
+                with self.assertRaisesRegex(runner.FlowError, "got FAILED"):
+                    runner.run_flow(
+                        "event-indexing-collision",
+                        with_docker=True,
+                        artifact_root=Path(temporary),
+                        candidate_provider=provider,
+                    )
+            run_dir = next(Path(temporary).iterdir())
+            control = runner.read_json(run_dir / "control.json")
+
+        provider.has_candidate.assert_not_called()
+        provider.create_candidate.assert_not_called()
+        self.assertEqual(control["attempts"], 0)
+        self.assertFalse((run_dir / "evidence.json").exists())
+        self.assertIn("service-stack image", control["failure_reason"])
+
+    def test_failure_reason_is_redacted_before_evidence_finalization(self) -> None:
+        provider = mock.Mock(source="fixture")
+        provider.has_candidate.return_value = True
+        provider.create_candidate.side_effect = runner.FlowError(
+            f"failed below {runner.PACKAGE_ROOT}/private and {Path.home()}/other"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ):
+                run_dir, control = runner.run_flow(
+                    "exhausted",
+                    artifact_root=Path(temporary),
+                    candidate_provider=provider,
+                )
+
+            retained = json.dumps(control)
+            self.assertNotIn(str(runner.PACKAGE_ROOT), retained)
+            self.assertNotIn(str(Path.home()), retained)
+            self.assertIn("<package>/private", retained)
+            self.assertEqual(runner.verify_evidence_manifest(run_dir), [])
+
     def test_preflight_reports_a_missing_hermes_profile(self) -> None:
         def command(args, **_):
             return subprocess.CompletedProcess(
@@ -1273,6 +2332,11 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
             mock.patch.object(
                 runner,
@@ -1299,6 +2363,11 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
             mock.patch.object(
                 runner,
@@ -1329,6 +2398,11 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "sensitive_environment_names", return_value=[]),
+            mock.patch.object(
+                runner,
+                "candidate_test_environment_problems",
+                return_value=("test|arm64", []),
+            ),
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/example"),
             mock.patch.object(
                 runner,

@@ -87,21 +87,16 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             repeat_last_patch=False,
         )
 
-        with self.assertRaisesRegex(
-            runner.FlowError,
-            "expected SUCCEEDED, got FAILED",
-        ):
-            runner.run_flow(
-                "retry-success",
-                max_attempts=1,
-                artifact_root=artifacts,
-                candidate_provider=provider,
-            )
+        run_dir, control = runner.run_flow(
+            "exhausted",
+            max_attempts=1,
+            artifact_root=artifacts,
+            candidate_provider=provider,
+        )
 
         run_dirs = [path for path in artifacts.iterdir() if path.is_dir()]
         self.assertEqual(len(run_dirs), 1)
-        run_dir = run_dirs[0]
-        control = runner.read_json(run_dir / "control.json")
+        self.assertEqual(run_dir, run_dirs[0])
         result = runner.read_json(run_dir / "attempt-1-result.json")
         self.assertEqual(control["outcome"], "FAILED")
         self.assertTrue(result["test"]["checks"][0]["passed"])
@@ -310,7 +305,10 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         with self.assertRaises(runner.PolicyDenied):
             runner.validate_incident(incident)
 
-        malicious = "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n"
+        malicious = (
+            "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n"
+            "+++ b/.github/workflows/ci.yml\n"
+        )
         with self.assertRaises(runner.PolicyDenied):
             runner.validate_patch(malicious)
 

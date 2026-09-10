@@ -7,5 +7,6 @@
   "environment": "prod",
   "evidence_window_minutes": 10,
   "summary": "Subjects containing repeated whitespace are not normalized consistently.",
-  "instructions": "Reproduce the normalization failure and prepare the smallest verified fix."
+  "instructions": "Reproduce the normalization failure and prepare the smallest verified fix.",
+  "allowed_paths": ["app/subject.py"]
 }

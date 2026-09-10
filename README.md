@@ -32,19 +32,30 @@ The central rule is simple: **Hermes proposes; the controller decides.**
 - An isolated Hermes profile with no web, browser, memory, delegation, MCP, or persistent container access.
 - Read-only inputs, one dedicated writable output, a read-only container root, and Docker network mode `none` for editing tools.
 - Host-generated patches with size, path, symlink, binary, mode-change, and restricted-content checks.
+- Optional independent diagnosis from only the bounded incident, evidence, and
+  controller feedback, without a prewritten diagnosis or edit plan.
+- An exact incident path allowlist that must match the trusted scenario policy,
+  plus a strict `candidate_ready` proposal whose zero-exit test claim and paths
+  must match the host-derived patch.
 - Repository tests and a required controller-owned verifier run in a pinned,
   network-disabled, read-only Docker sandbox. Candidate imports and calls run in
   a subordinate executor behind a trusted supervisor; the verifier parent owns
   assertions and the completion marker. Clean-workspace patch reapplication
   remains controller-owned.
-- Hash-linked run artifacts and file-based draft GitHub and notification mocks.
+- Digest-linked retry evidence from a fresh baseline and session, exact
+  provider-reported token buckets when available, sanitized SHA-256 evidence
+  manifests, and file-based draft GitHub and notification mocks.
 - An optional synthetic event-indexing example using PostgreSQL, Kafka, and OpenSearch.
 
 ## Requirements
 
 - Python 3.11 or newer
 - Git
-- Docker for candidate-code tests, with Compose for optional service checks. Bootstrap the digest-pinned Python image before verification because sandbox execution uses `--pull=never`.
+- Docker for candidate-code tests, with Compose for optional service checks.
+  Bootstrap the digest-pinned Python image before verification because sandbox
+  execution uses `--pull=never`. Service-stack preflight also requires every
+  declared runtime and Dockerfile base image to be digest-pinned and present
+  locally.
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) v0.20.6 only for
   the sandbox smoke test or a real-model run. Local qualification used
   [revision `5fc308a`](https://github.com/NousResearch/hermes-agent/commit/5fc308a70719a83cccdbba4c0e39c23f5a8239d5);
@@ -82,7 +93,12 @@ From the repository root:
 ./scripts/run-local.sh verify --latest
 ```
 
-The `retry-success` fixture deliberately fails the first candidate, returns bounded controller feedback, accepts the second candidate, recreates the exact candidate in a clean workspace, writes draft delivery mocks, and cleans up.
+The `retry-success` fixture makes the first candidate pass visible repository
+tests but fail a controller-owned held-out check. The controller retains
+digest-linked bounded feedback, starts the next attempt from the original
+baseline, accepts only a distinct second candidate, recreates that exact digest
+in a clean workspace, writes draft delivery mocks only after success, and
+cleans up.
 
 ## Inspect the effective policy
 
@@ -105,7 +121,9 @@ The larger example models an event identity collision across two tenants:
 
 ```bash
 ./scripts/bootstrap-pinned-images.sh all
-./scripts/run-local.sh preflight --with-docker
+./scripts/run-local.sh preflight \
+  --scenario event-indexing-collision \
+  --with-docker
 
 ./scripts/run-local.sh run \
   --scenario event-indexing-collision \
@@ -154,7 +172,7 @@ the isolation boundary for candidate tool execution.
 Then opt in explicitly:
 
 ```bash
-./scripts/run-local.sh preflight --with-docker --require-hermes
+./scripts/run-local.sh preflight --require-hermes
 
 ./scripts/run-local.sh run \
   --scenario retry-success \
@@ -188,9 +206,17 @@ Incident content cannot select the repository, allowed path prefixes, test comma
 
 ## Artifacts
 
-Each run writes an ignored `artifacts/<run-id>/` directory containing the control state, event stream, redacted evidence, candidate contracts, exact patches, test results, independent verification, mock delivery payloads, and closeout record.
+Each run writes an ignored `artifacts/<run-id>/` directory containing the
+control state, event stream, redacted evidence, candidate contracts, exact
+patches, test results, independent verification, mock delivery payloads,
+provider-reported per-attempt and aggregate usage when available, a closeout
+record, and `evidence-manifest.json`. The manifest inventories only the explicit
+terminal-state artifact allowlist and binds each sanitized file by size and
+SHA-256 digest.
 
-Artifacts are local audit evidence, not immutable attestations. Do not commit them; they may contain model output and local paths.
+Package-root and home-directory absolute paths are redacted from retained text.
+Artifacts remain local audit evidence, not signed or immutable attestations.
+Do not commit them; they may contain model output.
 
 ## Extend the workflow
 

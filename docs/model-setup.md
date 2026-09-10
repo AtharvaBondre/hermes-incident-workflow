@@ -110,7 +110,6 @@ above:
 
 ```bash
 ./scripts/run-local.sh preflight \
-  --with-docker \
   --require-hermes \
   --hermes-profile hermes-incident-workflow
 
@@ -130,6 +129,14 @@ The host Hermes process is expected to contact the selected inference provider,
 but this project does not enforce or allowlist host egress. Terminal commands
 and candidate verification remain in separate network-disabled Docker
 boundaries. No credential is copied into those containers.
+
+Preflight always checks the pinned candidate-test image because repository and
+controller verification require that Docker boundary. Add `--with-docker` only
+for a scenario that declares a reviewed service-stack contract, for example
+`--scenario event-indexing-collision --with-docker`; it is not a generic switch
+for the candidate-test sandbox. Service-stack preflight resolves the declared
+Compose verification service and fails before evidence or model work if any
+runtime or Dockerfile base image is unpinned or unavailable locally.
 
 ## Troubleshooting
 

@@ -8,5 +8,6 @@
   "environment": "staging",
   "evidence_window_minutes": 10,
   "summary": "Synthetic event processing failure used to qualify the workflow.",
-  "instructions": "Use only the bounded evidence and allowed repository paths. Prepare a minimal candidate and run the required test command."
+  "instructions": "Use only the bounded evidence and allowed repository paths. Prepare a minimal candidate and run the required test command.",
+  "allowed_paths": ["app/example.py"]
 }

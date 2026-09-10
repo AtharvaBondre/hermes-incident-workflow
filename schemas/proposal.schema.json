@@ -21,5 +21,16 @@
     },
     "rationale": {"type": "string", "minLength": 1, "maxLength": 2000},
     "uncertainty": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 500}}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "candidate_ready"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "changed_paths": {"minItems": 1},
+          "required_test": {"properties": {"exit_code": {"const": 0}}}
+        }
+      }
+    }
+  ]
 }

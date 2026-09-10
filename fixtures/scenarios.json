@@ -2,14 +2,17 @@
   "retry-success": {
     "incident": "incidents/retry-success.json",
     "controller_verifier": "verifiers/subject_logic.py",
+    "independent_diagnosis": true,
     "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/incomplete.patch", "patches/correct.patch"],
     "repeat_last_patch": false,
+    "retry_contract": {"required_attempts": 2},
     "expected_outcome": "SUCCEEDED"
   },
   "exhausted": {
     "incident": "incidents/exhausted.json",
     "controller_verifier": "verifiers/subject_logic.py",
+    "independent_diagnosis": true,
     "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/incomplete.patch"],
     "repeat_last_patch": true,
@@ -24,6 +27,7 @@
   "timeout": {
     "incident": "incidents/retry-success.json",
     "controller_verifier": "verifiers/subject_logic.py",
+    "independent_diagnosis": true,
     "allowed_changed_paths": ["app/subject.py"],
     "patches": ["patches/correct.patch"],
     "repeat_last_patch": false,

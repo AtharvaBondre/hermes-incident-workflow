@@ -7,5 +7,6 @@
   "environment": "prod",
   "evidence_window_minutes": 10,
   "summary": "The supplied candidate never fully fixes subject normalization.",
-  "instructions": "Attempt a bounded repair and stop when the controller refuses another attempt."
+  "instructions": "Attempt a bounded repair and stop when the controller refuses another attempt.",
+  "allowed_paths": ["app/subject.py"]
 }

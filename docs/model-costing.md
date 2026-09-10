@@ -122,6 +122,15 @@ The public repository's deterministic fixture runs use the fixture provider or a
 local scripted provider. They do not make paid model requests and therefore have
 no billable model token usage.
 
+For an explicitly authorized real-model run, the controller reads only the
+selected disposable Hermes session tree and retains exact provider-reported
+`input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, and
+`reasoning_tokens` buckets per attempt. `reasoning_tokens` is recorded as a
+subset of output and is not added to `total_tokens` a second time. Closeout also
+writes an aggregate across every attempted session. If Hermes does not report
+pricing, both cost fields remain `null`; unknown pricing is never presented as
+zero-dollar usage.
+
 A private customer qualification may run a real model. If that run predates
 token/cost capture, its retained execution evidence can still prove model,
 session, attempt count, tool calls, timings, patch, tests, and cleanup, but it
@@ -147,27 +156,45 @@ Every real-model qualification run should retain a cost packet:
 ```json
 {
   "schema_version": 1,
-  "run_id": "example-run-id",
   "session_id": "example-session-id",
-  "provider": "provider-id",
-  "model": "model-id",
-  "api_call_count": 0,
-  "input_tokens": 0,
-  "cached_input_tokens": 0,
-  "cache_write_tokens": 0,
-  "output_tokens": 0,
-  "reasoning_tokens": 0,
-  "estimated_cost_usd": 0.0,
+  "api_call_count": 2,
+  "input_tokens": 100,
+  "cache_read_tokens": 300,
+  "cache_write_tokens": 7,
+  "output_tokens": 20,
+  "reasoning_tokens": 5,
+  "total_tokens": 427,
+  "reasoning_tokens_are_subset_of_output": true,
+  "estimated_cost_usd": null,
   "actual_cost_usd": null,
-  "pricing_source": "provider pricing page or invoice export",
-  "pricing_checked_at": "YYYY-MM-DD",
-  "notes": "Actual cost must come from provider usage when available."
+  "routes": [
+    {
+      "session_id": "example-session-id",
+      "model": "model-id",
+      "billing_provider": "provider-id",
+      "billing_mode": "provider",
+      "task": "candidate",
+      "api_call_count": 2,
+      "input_tokens": 100,
+      "cache_read_tokens": 300,
+      "cache_write_tokens": 7,
+      "output_tokens": 20,
+      "reasoning_tokens": 5,
+      "total_tokens": 427,
+      "estimated_cost_usd": null,
+      "actual_cost_usd": null,
+      "cost_status": "unknown",
+      "cost_source": "none"
+    }
+  ]
 }
 ```
 
 Acceptance rule for cost reporting:
 
-- If provider usage fields are present, report exact tokens and calculated cost.
+- If provider usage fields are present, report the exact provider-reported token
+  buckets. Report cost only when the provider supplied a usable price source or
+  an invoice-backed actual value.
 - If only provider invoice or Azure/OpenAI billing export is present, report the
   invoice-backed actual cost and mark token split as unavailable.
 - If neither usage nor invoice data exists, do not quote an exact historical

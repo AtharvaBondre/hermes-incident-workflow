@@ -18,6 +18,12 @@ generic documentation.
 6. Register the scenario in `fixtures/scenarios.json`.
 7. Run it without a model before enabling the Hermes provider.
 
+Give the incident an exact `allowed_paths` list and give the trusted scenario
+the same sorted `allowed_changed_paths` list. The controller rejects a mismatch
+before constructing a worker request, even when both lists remain beneath the
+broader package path prefixes. Set `independent_diagnosis` to `true` when the
+worker must receive no prewritten diagnosis or edit plan.
+
 Keep customer names, real identifiers, internal endpoints, credentials, and retained model sessions out of examples.
 
 ## Change trusted policy
@@ -82,6 +88,13 @@ behavior, and message redaction have been reviewed.
 
 ## Real-model qualification
 
-Use a dedicated Hermes profile and an approved provider. Run repeated synthetic scenarios, including failed first attempts, malformed proposal output, provider timeout, cleanup failure, and patch-policy denial.
+Use a dedicated Hermes profile and an approved provider. Run repeated synthetic
+scenarios, including a visible-test pass followed by a held-out-check failure,
+distinct retry candidate, malformed proposal output, provider timeout, cleanup
+failure, path-policy denial, usage capture, manifest tampering, and retained-path
+redaction.
 
-Do not make a credentialed model run a required public CI job. Keep it an explicit manual qualification step.
+Do not make a credentialed model run a required public CI job. Keep it an
+explicit manual qualification step. Local synthetic proof is not customer or
+live readiness; document missing provider, repository, connector, and operating
+environment evidence as limitations.

@@ -63,7 +63,8 @@ any live credential or connector exists.
    confirm the repository, paths, evidence caps, test command, Hermes profile,
    attempt limits, and delivery authority match the intended mode.
 4. Add a synthetic incident that resembles one real class of issue without using
-   production data.
+   production data. Give it an exact path allowlist that matches the trusted
+   scenario list and remains beneath the package policy.
 5. Add visible repository tests and at least one controller-owned verifier.
 6. Run the deterministic fixture flow until success, failure, retry, timeout,
    and cleanup behavior are predictable.
@@ -89,7 +90,8 @@ should be visible in the policy review output.
 ## Non-negotiable boundaries
 
 - Incident text must not choose the repository, test command, delivery target,
-  credential, model, attempt limit, or allowed paths.
+  credential, model, attempt limit, or allowed paths. An incident path list must
+  exactly match the trusted scenario list before any worker request is built.
 - The model must not receive raw production credentials.
 - Evidence brokers must return bounded, redacted data and reject free-form
   queries.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added optional independent diagnosis, strict proposal/path binding, exact
+  incident-to-scenario path policy, and retained held-out retry verification.
+- Added provider-reported per-attempt and aggregate usage evidence, package/home
+  path redaction, and sanitized SHA-256 artifact manifests.
+- Made the pinned candidate image a fail-closed preflight dependency and limited
+  `--with-docker` to scenarios with an explicit service-stack contract.
 - Added public, profile-scoped Hermes model and credential setup guidance plus
   a no-request preflight check for the selected workflow profile.
 - Removed dated continuation and internal roadmap documents from the public

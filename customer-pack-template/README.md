@@ -11,7 +11,8 @@ with reviewed customer-specific policy.
 - `workflow.json`: trusted operator policy for repository scope, evidence caps,
   validation, Hermes profile, and limits.
 - `incidents/example-incident.json`: a sanitized incident packet used for dry
-  runs.
+  runs. Its exact `allowed_paths` must match the trusted scenario list and stay
+  beneath the package path policy.
 - `evidence/example-evidence.json`: bounded synthetic evidence shaped like the
   target evidence broker output.
 - `connectors/`: contracts for brokered read-only evidence.
@@ -26,6 +27,10 @@ with reviewed customer-specific policy.
 4. Run deterministic fixture attempts.
 5. Qualify a real Hermes model on synthetic data.
 6. Add brokered live connectors only after the private threat model is accepted.
+
+Use independent-diagnosis mode when the worker should receive only bounded
+incident data, evidence, and prior controller feedback. Do not include a
+prewritten diagnosis or edit plan in that mode.
 
 ## Safety boundary
 
