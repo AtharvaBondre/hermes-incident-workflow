@@ -4171,8 +4171,19 @@ def verify_hermes_real_model_artifacts(
     return sorted(set(issues))
 
 
+def stable_test_output(value: Any) -> Any:
+    """Normalize the elapsed time emitted by unittest across independent replays."""
+    if not isinstance(value, str):
+        return value
+    return re.sub(
+        r"(?m)^(Ran [0-9]+ tests? in )[0-9]+(?:\.[0-9]+)?s$",
+        r"\1<elapsed>s",
+        value,
+    )
+
+
 def stable_test_receipt(test: Any) -> dict[str, Any] | None:
-    """Discard nondeterministic cleanup metadata from a controller test result."""
+    """Discard nondeterministic timing and cleanup metadata from a test result."""
     if not isinstance(test, dict):
         return None
     checks = test.get("checks")
@@ -4190,9 +4201,17 @@ def stable_test_receipt(test: Any) -> dict[str, Any] | None:
         "command": test.get("command"),
         "exit_code": test.get("exit_code"),
         "passed": test.get("passed"),
-        "output": test.get("output"),
+        "output": stable_test_output(test.get("output")),
         "checks": [
-            {field: check[field] for field in check_fields if field in check}
+            {
+                field: (
+                    stable_test_output(check[field])
+                    if field == "output"
+                    else check[field]
+                )
+                for field in check_fields
+                if field in check
+            }
             for check in checks
         ],
     }
@@ -4344,7 +4363,7 @@ def verify_retry_chain(
 
     expected_first_feedback: dict[str, Any] | None = None
     if first_candidate is not None and first_result is not None:
-        first_test = replayed_first_test
+        first_test = first_result.get("test")
         if isinstance(first_test, dict):
             expected_first_feedback = bounded_controller_feedback(
                 [

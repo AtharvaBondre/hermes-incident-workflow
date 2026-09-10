@@ -747,9 +747,33 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         first = runner.cleanup_existing(run_dir)
         second = runner.cleanup_existing(run_dir)
 
+        original_replay = runner.replay_retry_attempt_test
+
+        def replay_with_different_unittest_timing(*args, **kwargs):
+            replayed, issues = original_replay(*args, **kwargs)
+            if replayed is not None:
+                replayed["output"] = runner.re.sub(
+                    r"(Ran [0-9]+ tests? in )[0-9]+(?:\.[0-9]+)?s",
+                    r"\g<1>9.999s",
+                    replayed["output"],
+                )
+                for check in replayed["checks"]:
+                    if isinstance(check.get("output"), str):
+                        check["output"] = runner.re.sub(
+                            r"(Ran [0-9]+ tests? in )[0-9]+(?:\.[0-9]+)?s",
+                            r"\g<1>9.999s",
+                            check["output"],
+                        )
+            return replayed, issues
+
         self.assertTrue(first["cleanup_complete"])
         self.assertTrue(second["cleanup_complete"])
-        self.assertEqual(runner.verify_run(run_dir), [])
+        with mock.patch.object(
+            runner,
+            "replay_retry_attempt_test",
+            side_effect=replay_with_different_unittest_timing,
+        ):
+            self.assertEqual(runner.verify_run(run_dir), [])
 
     def test_latest_run_ignores_newer_non_controller_artifacts(self) -> None:
         temporary, artifacts = self.artifact_root()
