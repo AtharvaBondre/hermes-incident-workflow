@@ -3,8 +3,9 @@
 # linux/amd64 and linux/arm64 variants of the pinned Alpine Python image.
 kafka-python==2.3.2 \
     --hash=sha256:e8a5e6f2c4ce13a8041669337038d5125e0e09e6d6f0911902ae5939e5b9595e
-psycopg==3.2.9 \
-    --hash=sha256:01a8dadccdaac2123c916208c96e06631641c0566b22005493f09663c7a8d3b6
+psycopg==3.3.8 \
+    --hash=sha256:86c135a9a6f5e98404975c5787e620bf436a7807e088baebd1b20fa48d3b4b4f \
+    --hash=sha256:ca50af6072ba9ea6866f33021975230c2555d7bfdb9d8f94ca3af5c3d1bf2167
 psycopg-binary==3.2.9 \
     --hash=sha256:14f64d1ac6942ff089fc7e926440f7a5ced062e2ed0949d7d2d680dc5c00e2d4 \
     --hash=sha256:52e239cd66c4158e412318fbe028cd94b0ef21b0707f56dcb4bdc250ee58fd40
