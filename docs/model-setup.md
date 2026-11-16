@@ -15,7 +15,7 @@ use its installer with this repository's exact qualified source revision:
 
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh \
-  | bash -s -- --commit 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+  | bash -s -- --commit 3b421578588243f920886e6fe79a6faa87ea026e
 ```
 
 Verify the installed build:
@@ -24,8 +24,8 @@ Verify the installed build:
 hermes --version
 ```
 
-This repository currently requires Hermes Agent `v0.20.6` at source revision
-`5fc308a70719a83cccdbba4c0e39c23f5a8239d5`. The installer does not roll an
+This repository currently requires Hermes Agent `v0.23.1` at source revision
+`3b421578588243f920886e6fe79a6faa87ea026e`. The installer does not roll an
 existing newer checkout backward unless `--force-commit` is also supplied; use
 that option only when intentionally dedicating that Hermes installation to
 this qualified workflow version. Do not edit its `pyproject.toml` or `uv.lock`.
@@ -34,14 +34,12 @@ untracked tree, and the qualified hashes of both packaging files immediately
 before every real-model invocation. It does not trust the banner's moving
 `upstream` field.
 
-The latest stable upstream release reviewed on 2026-11-16 is
-[v0.23.1](https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.1)
-at source commit `3b421578588243f920886e6fe79a6faa87ea026e`. It rolls up a
-large v0.23.0-to-v0.23.1 change window that includes gateway, browser-profile,
-plugin, hook, clipboard, and group-chat surfaces. It is a blocked upgrade, not
-a compatible substitute: its complete runtime, profile layout, terminal
-backend, provider behavior, packaging files, and isolation contract have not
-passed this repository's qualification.
+The exact packaging identity is also bound to SHA-256
+`ee825ad304ad685625c8878cd34b7923ec64579cdc08e646b84b76ba3d4c1cfc`
+for `pyproject.toml` and
+`d0ae8bfd20db7a8ca0e75418df718315c58088b120366227cc62ee8fe25d4274`
+for `uv.lock`. The upstream v0.23.1 tag is not publisher-signed, so the semantic
+version or tag name alone is not accepted as runtime identity.
 
 ## 2. Install the disposable workflow profile
 
@@ -78,10 +76,22 @@ separately approved and tested whole-process design.
 
 The terminal backend remains Docker-based and network-disabled. Besides the
 read-only input, task, and skill mounts and the writable output mount, Hermes
-v0.20.6 adds read-only cache, image, and attachment mounts. Every one is
-sourced from the controller-created disposable profile, starts empty, and is
-checked by the sandbox smoke. No credential file is mounted into the candidate
-container.
+v0.23.1 adds read-only cache, image, attachment, generated-output, and
+composer-paste mounts. Every one is sourced from the controller-created
+disposable profile, starts empty, and is checked by the sandbox smoke. No
+credential file is mounted into the candidate container.
+
+Hermes v0.23.1 routes `chat` through its gateway. For every attempt, the
+controller waits for readiness from the exact qualified revision, discards the
+attach ticket, materializes the three host-owned mount sources in the copied
+profile because launcher environment placeholders do not cross the gateway
+boundary, and verifies that the disposable gateway has stopped before deleting
+its state. The exact model-visible tool surface is `terminal`, `tool_search`,
+`tool_describe`, and `tool_call`; `process_manage` is deferred behind that
+bridge. Bridge discovery and dispatch use the same disabled-toolset scope, so
+they do not re-enable the `memory`, `web`, `browser`, `delegation`,
+`code_execution`, `cronjob`, `bfl`, or `kanban` toolsets disabled by this
+profile.
 
 ## 3. Configure a provider and model
 
@@ -111,10 +121,10 @@ inside the isolated launcher home. Refreshable OAuth state is disposable for
 each attempt; configure a non-expiring provider key for repeatable unattended
 workflow runs.
 
-The qualified Hermes v0.20.6 predates the Anthropic OAuth hardening published
-in [Hermes v0.21.0](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.31).
-Do not use Anthropic OAuth for unattended runs on this pin; use a provider API
-key or wait for a separately qualified Hermes upgrade.
+The qualified runtime includes the upstream Anthropic OAuth hardening first
+published in Hermes v0.21.0. That does not qualify any provider, OAuth flow, or
+unattended real-model run for this repository; prefer a scoped provider API key
+and complete a separately approved no-customer-data qualification before use.
 
 Provider and model identifiers passed to the workflow must match the values
 selected in Hermes. The available providers and models are owned by the

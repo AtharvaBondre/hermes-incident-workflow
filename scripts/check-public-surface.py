@@ -7,12 +7,18 @@ import json
 import os
 import re
 import stat
-import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_PARTS = {".git", ".venv", "artifacts", "__pycache__", "dist", "build"}
+SKIP_PARTS = {
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "artifacts",
+    "__pycache__",
+    "dist",
+    "build",
+}
 FORBIDDEN_INTERNAL_PATHS = {
     "docs/implementation-plan.md",
     "docs/product-roadmap.md",
@@ -44,9 +50,7 @@ REQUIRED = {
 def source_files() -> list[Path]:
     files: list[Path] = []
     for current, directory_names, file_names in os.walk(ROOT, followlinks=False):
-        directory_names[:] = [
-            name for name in directory_names if name not in SKIP_PARTS
-        ]
+        directory_names[:] = [name for name in directory_names if name not in SKIP_PARTS]
         current_path = Path(current)
         for name in file_names:
             path = current_path / name
@@ -121,9 +125,7 @@ def main() -> int:
             issues.append("skill frontmatter is missing or malformed")
         else:
             fields = {
-                line.split(":", 1)[0].strip()
-                for line in match.group(1).splitlines()
-                if ":" in line
+                line.split(":", 1)[0].strip() for line in match.group(1).splitlines() if ":" in line
             }
             if fields != {"name", "description"}:
                 issues.append("skill frontmatter must contain only name and description")

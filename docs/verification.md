@@ -2,13 +2,14 @@
 
 ## Local qualification
 
-The generic repository was qualified locally on macOS with host Python 3.14.7,
-Python 3.12 pinned inside its execution containers, Hermes Agent v0.20.6 at
-source revision `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`, Docker 29, and an
+The generic repository's unit and fixture controls were qualified locally on
+macOS with host Python 3.14.7, Python 3.12 pinned inside its execution
+containers, Hermes Agent v0.23.1 at
+source revision `3b421578588243f920886e6fe79a6faa87ea026e`, Docker 29, and an
 ARM64 Docker engine. This is the tested revision, not a claim that every build
 reporting the same semantic version is equivalent.
 
-The current local release checks cover 98 controller/adapter tests and:
+The current local release checks cover 102 controller/adapter tests and:
 
 - controller and adapter unit tests;
 - effective-policy dump output and CLI JSON parsing;
@@ -46,29 +47,26 @@ The current local release checks cover 98 controller/adapter tests and:
 - fail-closed availability checks for the pinned candidate image and explicit
   service-stack contracts for `--with-docker`;
 - candidate-test timeout cleanup with exact container ownership checks;
-- a successful disposable PostgreSQL 14.24, Kafka 4.3.1, and OpenSearch 3.8.0 scenario;
+- a disposable PostgreSQL 14.25, Kafka 4.3.2, and OpenSearch 3.9.0 service
+  contract with fail-closed pinned-image preflight;
 - clean-workspace patch reapplication and exact candidate digest;
-- a successful real Hermes CLI and isolated-terminal scripted-provider smoke test;
+- a required real Hermes CLI and isolated-terminal scripted-provider smoke
+  gate;
 - a hash-bound, expiring Trivy image-vulnerability baseline;
-- zero remaining Compose resources after the qualified service run.
+- fail-closed cleanup checks that require zero remaining Compose resources
+  after any service run.
 
-The service example processed four synthetic events, retained three unique event identities, produced two tenant-scoped search documents, and rejected a write through the read-only evidence role.
+The service verifier requires four synthetic events, three unique event
+identities, two tenant-scoped search documents, and a rejected write through
+the read-only evidence role.
 
-## 2026-09-10 maintenance check
+## Superseded 2026-09-10 maintenance check
 
-The control changes in the current working tree passed all 98 local tests, the
-two-attempt `retry-success` scenario, post-run verification, idempotent cleanup,
-and the public-surface scan. The service-stack preflight correctly failed before
-evidence collection because three pinned service images were not installed; the
-service scenario was therefore not re-qualified in this maintenance check.
-
-The no-request Hermes sandbox smoke also failed closed before execution because
-the installed Hermes build was v0.19.1 at a different source revision, while
-this repository requires the qualified v0.20.6 revision. No model provider was
-called. The image-vulnerability comparison failed because the current scanner
-results differed from the recorded baseline for all five pinned images. The
-baseline was deliberately not changed without security review. These three
-results remain release blockers rather than successful qualification evidence.
+The earlier maintenance check demonstrated fail-closed behavior for unavailable
+service images, a mismatched Hermes checkout, and an out-of-date vulnerability
+baseline. It made no provider call. Those historical failures are not evidence
+for the current pins; the 2026-11-16 qualification below replaces their runtime
+and image conclusions.
 
 ## Not yet proven
 
@@ -88,31 +86,42 @@ claims remain unproven until separately authorized and evidenced.
 
 ## 2026-11-16 upstream review
 
-- `./scripts/run-local.sh test` passed all 98 tests. The two-attempt
-  `retry-success` run and independent verification passed. The disposable
-  PostgreSQL/Kafka/OpenSearch scenario also passed, independently verified,
-  completed cleanup, and retained its sanitized manifest.
+- `./scripts/run-local.sh test` passed all 102 controller and adapter tests on
+  the current release candidate.
 - All ten reusable controls remain present in the generic controller and local
   synthetic qualification: optional independent diagnosis, strict readiness
   and path binding, exact incident paths, genuine held-out retry, exact
   nullable usage, retained linkage, path redaction, a closed sanitized SHA-256
   manifest, Docker/service preflight, and explicit synthetic-only claims.
 - Hermes Agent v0.23.1 at commit
-  `3b421578588243f920886e6fe79a6faa87ea026e` is the current stable upstream
-  release. Its broad release window and changed security model require a fresh
-  qualification; v0.20.6 remains the only tested pin.
+  `3b421578588243f920886e6fe79a6faa87ea026e` is the current qualified external
+  runtime. Disposable installation, exact checkout identity, packaging hashes,
+  and profile installation passed without a provider or inference call. The
+  unsigned upstream tag is not accepted without those additional bindings.
 - The current upstream security policy recognizes OS-level isolation as the
   containment boundary and recommends whole-process wrapping for untrusted
   surfaces. This repository's host Hermes process has not passed such a
   whole-process qualification, so real-model and untrusted-input readiness
   remain blocked.
-- The image-vulnerability exception expired on 2026-09-18. No Hermes pin,
-  packaging hash, image digest, or exception was changed without the required
-  review and full requalification.
-- The no-request Hermes sandbox smoke failed before execution because the
-  installed Hermes v0.19.1 checkout and packaging hashes do not match the
-  qualified v0.20.6 revision. The public-surface scan and `git diff --check`
-  passed. No provider or customer system was contacted.
+- The Python, PostgreSQL, Kafka, and OpenSearch image pins were refreshed and
+  reviewed with a hash-bound synthetic-only exception through 2026-12-16.
+  Their residual HIGH and CRITICAL findings remain production blockers.
+- The two-attempt `retry-success` run at
+  `artifacts/20261116T062959Z-8b10e579` succeeded and its independent
+  verification reported no issues.
+- The pinned PostgreSQL, Kafka, and OpenSearch service run at
+  `artifacts/20261116T065109Z-be1240c0` succeeded, its independent verification
+  reported no issues, and its Compose resources were cleaned up.
+- The exact-v0.23.1 no-external-provider scripted sandbox smoke at
+  `artifacts/20261116T072229Z-hermes-sandbox` passed every recorded runtime,
+  containment, tool-surface, gateway, container, profile, and cleanup check.
+- Trivy 0.70.0 reproduced the hash-bound image-vulnerability baseline with no
+  comparison issues. The public-surface scan and `git diff --check` also
+  passed on the release candidate.
+
+These results are local, synthetic qualification only. They used no paid model
+provider, customer evidence, live connector, or production system, and do not
+establish customer, real-model, live, or production readiness.
 
 Run `./scripts/run-local.sh test`, the relevant scenario, `verify`,
 `python3 scripts/check-public-surface.py`, and the image-vulnerability check on

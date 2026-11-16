@@ -4,10 +4,10 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/.." && pwd)"
 profile_source="${repository_root}/hermes-profile"
-required_hermes_version="0.20.6"
-qualified_hermes_revision="5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-qualified_pyproject_sha256="9b6d41aca6d908e5af2f90a335b1c2b7eeaf8e3ce667b5a823a73e8643c56c75"
-qualified_lock_sha256="5a9276183671e997c2213ede18b9cda4920e1cf57616219a3b08ddebda3281ab"
+required_hermes_version="0.23.1"
+qualified_hermes_revision="3b421578588243f920886e6fe79a6faa87ea026e"
+qualified_pyproject_sha256="ee825ad304ad685625c8878cd34b7923ec64579cdc08e646b84b76ba3d4c1cfc"
+qualified_lock_sha256="d0ae8bfd20db7a8ca0e75418df718315c58088b120366227cc62ee8fe25d4274"
 
 if ! command -v hermes >/dev/null 2>&1; then
   printf '%s\n' 'Hermes is not installed or is not on PATH.' >&2

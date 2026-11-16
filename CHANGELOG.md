@@ -2,9 +2,19 @@
 
 ## Unreleased
 
-- Recorded the 2026-11-16 Hermes v0.23.1 and upstream security-policy review,
-  while retaining v0.20.6 as the only tested pin and marking the expired image
-  baseline and unqualified whole-process lane as release blockers.
+- Qualified Hermes Agent v0.23.1 at an exact source revision and packaging
+  identity, including its expanded disposable cache-mount contract.
+- Refreshed the digest-pinned Python, PostgreSQL, Kafka, and OpenSearch images
+  and their hash-bound, synthetic-only vulnerability exceptions through
+  2026-12-16; no image is thereby cleared for production.
+- Extended only the OpenSearch startup allowance for the current 3.9.0 image;
+  the health probe, resource limits, run deadline, and fail-closed dependency
+  gate remain unchanged.
+- Limited the Hermes terminal container to 256 processes and stop its
+  disposable gateway before exact output-mount cleanup, while retaining
+  fail-closed gateway and container cleanup evidence.
+- Retained the upstream whole-process isolation limitation: the Docker terminal
+  confines candidate commands but does not sandbox the host Hermes process.
 - Added optional independent diagnosis, strict proposal/path binding, exact
   incident-to-scenario path policy, and retained held-out retry verification.
 - Added provider-reported per-attempt and aggregate usage evidence, package/home

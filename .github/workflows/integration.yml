@@ -32,7 +32,10 @@ jobs:
         run: ./scripts/bootstrap-pinned-images.sh all
 
       - name: Preflight Docker configuration
-        run: ./scripts/run-local.sh preflight --with-docker
+        run: |
+          ./scripts/run-local.sh preflight \
+            --scenario event-indexing-collision \
+            --with-docker
 
       - name: Run and verify synthetic service scenario
         run: |

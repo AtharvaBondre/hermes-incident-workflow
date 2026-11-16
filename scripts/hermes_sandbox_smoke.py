@@ -14,7 +14,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_SPEC = importlib.util.spec_from_file_location(
     "hiw_sandbox_runner",
@@ -31,12 +30,14 @@ MODEL = "mock-model"
 PORT = 8000
 IMAGE = (
     "python:3.12-slim-bookworm@sha256:"
-    "a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134"
+    "935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df"
 )
 SKILL_SENTINEL = "the outer controller alone counts attempts, enforces the deadline"
 EXPECTED_TOOL_NAMES = {
-    "process",
     "terminal",
+    "tool_call",
+    "tool_describe",
+    "tool_search",
 }
 EXPECTED_CONTAINER_ENVIRONMENT_NAMES = {
     "HIW_SANDBOX_MODE",
@@ -154,9 +155,7 @@ def wait_and_cleanup_new_containers(
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            observation_errors.append(
-                f"Docker container removal failed: {type(exc).__name__}"
-            )
+            observation_errors.append(f"Docker container removal failed: {type(exc).__name__}")
             continue
         if result.returncode == 0:
             forced.append(container_id)
@@ -236,6 +235,21 @@ def parse_sandbox_proof(proof_path: Path) -> tuple[dict[str, Any] | None, str | 
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def collect_runtime_log_tails(profile_dir: Path) -> dict[str, str]:
+    """Retain only bounded, path-redacted diagnostic tails before profile cleanup."""
+    logs: dict[str, str] = {}
+    log_root = profile_dir / "logs"
+    if not log_root.is_dir():
+        return logs
+    for path in sorted(log_root.glob("*.log"))[:4]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        logs[path.name] = workflow_runner.redact_text(text)[-4000:]
+    return logs
+
+
 class ModelHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     request_count = 0
@@ -267,18 +281,20 @@ class ModelHandler(BaseHTTPRequestHandler):
         tools = request.get("tools") or []
         if tools:
             type(self).agent_request_count += 1
-        type(self).tool_names = sorted(
+        observed_tool_names = {
             tool.get("function", {}).get("name", "") for tool in tools if tool.get("function")
-        )
+        }
+        type(self).tool_names = sorted(set(type(self).tool_names) | observed_tool_names)
         message_text = "\n".join(
-            str(message.get("content", ""))
-            for message in request.get("messages") or []
+            str(message.get("content", "")) for message in request.get("messages") or []
         ).lower()
-        type(self).skill_loaded = SKILL_SENTINEL in message_text
-        has_tool_result = any(message.get("role") == "tool" for message in request.get("messages") or [])
+        type(self).skill_loaded = type(self).skill_loaded or SKILL_SENTINEL in message_text
+        has_tool_result = any(
+            message.get("role") == "tool" for message in request.get("messages") or []
+        )
         if has_tool_result:
             type(self).tool_result_summaries = [
-                str(message.get("content", ""))[-2000:]
+                workflow_runner.redact_text(str(message.get("content", "")))[-4000:]
                 for message in request.get("messages") or []
                 if message.get("role") == "tool"
             ]
@@ -412,6 +428,11 @@ def main() -> int:
     run_dir = ARTIFACTS / f"{timestamp}-hermes-sandbox"
     output_dir = run_dir / "output"
     disposable_profile: dict[str, Any] | None = None
+    environment: dict[str, str] | None = None
+    gateway_attempted = False
+    gateway_start: dict[str, Any] | None = None
+    mount_binding: dict[str, Any] | None = None
+    runtime_log_tails: dict[str, str] = {}
     thread: threading.Thread | None = None
     try:
         output_dir.mkdir(parents=True)
@@ -422,16 +443,27 @@ def main() -> int:
         )
         profile_dir = disposable_profile["profile_dir"]
         smoke_env = profile_dir / ".env"
-        smoke_env.write_text(
-            "OPENAI_API_KEY=local-smoke-no-secret\n", encoding="utf-8"
-        )
+        smoke_env.write_text("OPENAI_API_KEY=local-smoke-no-secret\n", encoding="utf-8")
         smoke_env.chmod(0o600)
+        mount_binding = workflow_runner.bind_disposable_hermes_mounts(
+            disposable_profile,
+            input_dir=FIXTURE_REPOSITORY,
+            task_path=SANDBOX_TASK,
+            output_dir=output_dir,
+        )
         environment = workflow_runner.hermes_process_environment(
             input_dir=FIXTURE_REPOSITORY,
             task_path=SANDBOX_TASK,
             output_dir=output_dir,
             hermes_root=disposable_profile["hermes_root"],
             launcher_home=disposable_profile["launcher_home"],
+        )
+        gateway_attempted = True
+        gateway_start = workflow_runner.prepare_hermes_gateway(
+            hermes,
+            PROFILE,
+            environment=environment,
+            timeout=workflow_runner.MAX_HERMES_GATEWAY_START_SECONDS,
         )
         command = [
             hermes,
@@ -461,6 +493,17 @@ def main() -> int:
             server.shutdown()
             thread.join(timeout=5)
         server.server_close()
+        if disposable_profile is not None:
+            runtime_log_tails = collect_runtime_log_tails(disposable_profile["profile_dir"])
+        gateway_cleanup = (
+            workflow_runner.stop_hermes_gateway(
+                hermes,
+                PROFILE,
+                environment=environment,
+            )
+            if gateway_attempted and environment is not None
+            else {"requested": False, "complete": True}
+        )
         setup_cleanup = (
             workflow_runner.cleanup_disposable_hermes_profile(disposable_profile)
             if disposable_profile is not None
@@ -472,6 +515,10 @@ def main() -> int:
                 "kind": "hermes-scripted-provider-sandbox-proof",
                 "ok": False,
                 "setup_error": f"{type(exc).__name__}: {exc}",
+                "gateway_start": gateway_start,
+                "mount_binding": mount_binding,
+                "gateway_cleanup": gateway_cleanup,
+                "runtime_log_tails": runtime_log_tails,
                 "disposable_profile_cleanup": setup_cleanup,
             }
             (run_dir / "hermes-runtime-proof.json").write_text(
@@ -510,17 +557,31 @@ def main() -> int:
         thread.join(timeout=5)
     elapsed = round(time.monotonic() - started, 3)
     proof_path = output_dir / "sandbox-proof.json"
+    sandbox_proof, proof_parse_error = parse_sandbox_proof(proof_path)
+    runtime = ModelHandler.container_inspection
+    runtime_log_tails = collect_runtime_log_tails(profile_dir)
+    gateway_cleanup = workflow_runner.stop_hermes_gateway(
+        hermes,
+        PROFILE,
+        environment=environment,
+    )
     (
         grace_remaining,
         harness_removed,
         final_remaining,
         cleanup_observation_errors,
     ) = wait_and_cleanup_new_containers(containers_before, output_dir)
-    sandbox_proof, proof_parse_error = parse_sandbox_proof(proof_path)
-    runtime = ModelHandler.container_inspection
     expected_mounts = {
-        "/input": {"source": str(FIXTURE_REPOSITORY.resolve()), "read_write": False, "type": "bind"},
-        "/task/sandbox_task.py": {"source": str(SANDBOX_TASK.resolve()), "read_write": False, "type": "bind"},
+        "/input": {
+            "source": str(FIXTURE_REPOSITORY.resolve()),
+            "read_write": False,
+            "type": "bind",
+        },
+        "/task/sandbox_task.py": {
+            "source": str(SANDBOX_TASK.resolve()),
+            "read_write": False,
+            "type": "bind",
+        },
         "/output": {"source": str(output_dir.resolve()), "read_write": True, "type": "bind"},
         "/root/.hermes/skills": {
             "source": str((profile_dir / "skills").resolve()),
@@ -544,15 +605,25 @@ def main() -> int:
         if item.get("type") == "bind"
     }
     cache_mount_sources_empty = all(
-        (profile_dir / relative).is_dir()
-        and not any((profile_dir / relative).iterdir())
+        (profile_dir / relative).is_dir() and not any((profile_dir / relative).iterdir())
         for relative in workflow_runner.HERMES_CACHE_DIRECTORIES
     )
-    profile_cleanup = workflow_runner.cleanup_disposable_hermes_profile(
-        disposable_profile
-    )
+    profile_cleanup = workflow_runner.cleanup_disposable_hermes_profile(disposable_profile)
     checks = {
         "hermes_runtime_qualified": runtime_identity["qualified"],
+        "disposable_gateway_ready": bool(
+            gateway_start
+            and gateway_start.get("ready") is True
+            and gateway_start.get("client_code_sha") == workflow_runner.HERMES_QUALIFIED_REVISION
+            and gateway_start.get("attach_ticket_retained") is False
+        ),
+        "controller_mount_binding_exact": bool(
+            mount_binding
+            and mount_binding.get("bound") is True
+            and mount_binding.get("mounts")
+            == ["/input:ro", "/task/sandbox_task.py:ro", "/output:rw"]
+            and mount_binding.get("host_paths_retained") is False
+        ),
         "hermes_exit_zero": returncode == 0,
         "two_agent_model_turns": ModelHandler.agent_request_count == 2,
         "tool_surface_exact": set(ModelHandler.tool_names) == EXPECTED_TOOL_NAMES,
@@ -566,13 +637,11 @@ def main() -> int:
         "container_env_exact": set(runtime.get("environment_names", []))
         == EXPECTED_CONTAINER_ENVIRONMENT_NAMES,
         "container_hermes_env_values_exact": bool(
-            sandbox_proof
-            and sandbox_proof.get("hermes_environment") == EXPECTED_HERMES_ENVIRONMENT
+            sandbox_proof and sandbox_proof.get("hermes_environment") == EXPECTED_HERMES_ENVIRONMENT
         ),
         "container_cache_sources_empty": cache_mount_sources_empty,
         "container_has_no_credential_mounts": all(
-            item.get("destination")
-            not in {"/root/.hermes/.env", "/root/.hermes/auth.json"}
+            item.get("destination") not in {"/root/.hermes/.env", "/root/.hermes/auth.json"}
             for item in runtime.get("mounts", [])
         ),
         "container_not_privileged": runtime.get("privileged") is False,
@@ -593,12 +662,14 @@ def main() -> int:
         "sandbox_env_exact": bool(
             sandbox_proof and sandbox_proof.get("unexpected_environment_names") == []
         ),
-        "candidate_cache_clean": bool(sandbox_proof is not None and sandbox_proof.get("cache_files") == []),
+        "candidate_cache_clean": bool(
+            sandbox_proof is not None and sandbox_proof.get("cache_files") == []
+        ),
         "tests_passed_in_task": bool(sandbox_proof and sandbox_proof.get("test_passed")),
         "container_removed_after_run": not grace_remaining,
-        "failure_cleanup_complete": not final_remaining
-        and not cleanup_observation_errors,
+        "failure_cleanup_complete": not final_remaining and not cleanup_observation_errors,
         "disposable_profile_cleanup_complete": profile_cleanup["complete"],
+        "disposable_gateway_cleanup_complete": gateway_cleanup["complete"],
     }
     record = {
         "schema_version": 1,
@@ -613,6 +684,10 @@ def main() -> int:
         "run_error": run_error,
         "proof_parse_error": proof_parse_error,
         "checks": checks,
+        "gateway_start": gateway_start,
+        "mount_binding": mount_binding,
+        "gateway_cleanup": gateway_cleanup,
+        "runtime_log_tails": runtime_log_tails,
         "runtime": runtime,
         "tool_names": ModelHandler.tool_names,
         "tool_result_summaries": ModelHandler.tool_result_summaries,
@@ -627,7 +702,13 @@ def main() -> int:
     }
     record_path = run_dir / "hermes-runtime-proof.json"
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"ok": all(checks.values()), "run_dir": str(run_dir), "checks": checks}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {"ok": all(checks.values()), "run_dir": str(run_dir), "checks": checks},
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0 if all(checks.values()) else 1
 
 

@@ -5,13 +5,13 @@ Hermes Incident Workflow is a local-first reference implementation for bounded A
 This is an experimental POC. The default workflow uses synthetic incidents, fixture repositories, disposable containers, and file-based delivery mocks. It does not connect to production systems.
 
 > [!CAUTION]
-> The qualified Hermes boundary remains pinned to v0.20.6, while the latest
-> stable upstream release reviewed on 2026-11-16 is v0.23.1. Upstream now
-> explicitly treats whole-process operating-system isolation as the supported
-> boundary for untrusted inputs. This repository has not qualified that release
-> or a whole-process real-model lane, and its image-vulnerability exception
-> expired on 2026-09-18. Use the current checkout for local synthetic
-> evaluation only, not customer, live, or production work.
+> The qualified external runtime is Hermes Agent v0.23.1 at one exact source
+> revision and packaging identity. Upstream explicitly treats whole-process
+> operating-system isolation as the supported boundary for untrusted inputs;
+> this repository's terminal sandbox does not confine the host Hermes process.
+> Its current container-vulnerability exceptions expire on 2026-12-16 and are
+> limited to credential-free, disposable synthetic evaluation. Do not treat
+> this POC as customer, live, real-model, or production readiness.
 
 ## Why this exists
 
@@ -65,9 +65,9 @@ The central rule is simple: **Hermes proposes; the controller decides.**
   execution uses `--pull=never`. Service-stack preflight also requires every
   declared runtime and Dockerfile base image to be digest-pinned and present
   locally.
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) v0.20.6 only for
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) v0.23.1 only for
   the sandbox smoke test or a real-model run. Local qualification used
-  [revision `5fc308a`](https://github.com/NousResearch/hermes-agent/commit/5fc308a70719a83cccdbba4c0e39c23f5a8239d5);
+  [revision `3b42157`](https://github.com/NousResearch/hermes-agent/commit/3b421578588243f920886e6fe79a6faa87ea026e);
   another build reporting the same version is not yet qualified.
 
 The deterministic fixture workflow does not require model credentials or a model request.

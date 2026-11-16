@@ -8,7 +8,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 RUNNER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "runner.py"
 SPEC = importlib.util.spec_from_file_location("hiw_local_runner", RUNNER_PATH)
 assert SPEC and SPEC.loader
@@ -101,9 +100,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         self.assertEqual(control["outcome"], "FAILED")
         self.assertTrue(result["test"]["checks"][0]["passed"])
         self.assertFalse(result["test"]["checks"][1]["passed"])
-        self.assertFalse(
-            result["test"]["checks"][1]["trusted_verifier_completed"]
-        )
+        self.assertFalse(result["test"]["checks"][1]["trusted_verifier_completed"])
         self.assertFalse((run_dir / "mock-github.json").exists())
 
     def test_five_failures_do_not_publish(self) -> None:
@@ -208,7 +205,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             list(runner.ALLOWED_PATCH_PREFIXES),
         )
         self.assertEqual(policy["hermes"]["proposal_authority"], "reporting-only")
-        self.assertEqual(policy["hermes"]["required_version"], "0.20.6")
+        self.assertEqual(policy["hermes"]["required_version"], "0.23.1")
         self.assertEqual(
             policy["hermes"]["profile_state"],
             "controller-owned-disposable-per-attempt",
@@ -286,9 +283,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             runner.Candidate(record, runner.FIXTURES / "patches/correct.patch")
 
     def test_scenario_path_policy_rejects_an_unverified_module(self) -> None:
-        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
-            "event-indexing-collision"
-        ]
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")["event-indexing-collision"]
 
         with self.assertRaisesRegex(
             runner.PolicyDenied,
@@ -313,9 +308,9 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             runner.validate_patch(malicious)
 
     def test_mixed_patch_cannot_hide_forbidden_deletion(self) -> None:
-        patch_text = (
-            runner.FIXTURES / "patches/mixed-forbidden-delete.patch"
-        ).read_text(encoding="utf-8")
+        patch_text = (runner.FIXTURES / "patches/mixed-forbidden-delete.patch").read_text(
+            encoding="utf-8"
+        )
 
         with self.assertRaisesRegex(
             runner.PolicyDenied,
@@ -388,7 +383,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             "--entrypoint=/usr/bin/env",
             (
                 "python:3.12-alpine@sha256:"
-                "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+                "c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
             ),
             "-i",
             "HOME=/tmp",
@@ -481,7 +476,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
             "--entrypoint=/usr/bin/env",
             (
                 "python:3.12-alpine@sha256:"
-                "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+                "c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
             ),
             "-i",
             "HOME=/tmp",
@@ -590,8 +585,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         cidfile = root / "container.cid"
         cidfile.write_text(candidate_id + "\n", encoding="utf-8")
         inspect_format = (
-            '{{.Id}}|{{index .Config.Labels '
-            '"hermes-incident-workflow.candidate-test"}}'
+            '{{.Id}}|{{index .Config.Labels "hermes-incident-workflow.candidate-test"}}'
         )
         inspected = subprocess.CompletedProcess(
             [],
@@ -725,9 +719,7 @@ class LocalFlowAcceptanceTests(unittest.TestCase):
         result_path = run_dir / f"attempt-{control['attempts']}-result.json"
         result = runner.read_json(result_path)
         trusted = next(
-            check
-            for check in result["test"]["checks"]
-            if "trusted_verifier_completed" in check
+            check for check in result["test"]["checks"] if "trusted_verifier_completed" in check
         )
         trusted["trusted_verifier_completed"] = False
         runner.write_json(result_path, result)

@@ -10,7 +10,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 RUNNER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "runner.py"
 SPEC = importlib.util.spec_from_file_location("hiw_candidate_runner", RUNNER_PATH)
 assert SPEC and SPEC.loader
@@ -54,15 +53,30 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "inspect_hermes_runtime",
                 return_value=runtime_identity or self.qualified_runtime_identity(),
             ),
+            mock.patch.object(
+                runner,
+                "prepare_hermes_gateway",
+                return_value={
+                    "ready": True,
+                    "state": "ready",
+                    "reason_code": None,
+                    "client_code_sha": runner.HERMES_QUALIFIED_REVISION,
+                    "elapsed_seconds": 0.1,
+                    "attach_ticket_retained": False,
+                },
+            ),
+            mock.patch.object(
+                runner,
+                "stop_hermes_gateway",
+                return_value={"requested": True, "complete": True, "returncode": 0},
+            ),
         ):
             yield
 
     def fixture_context(
         self, artifact_dir: Path, attempt: int = 1, feedback: list[dict] | None = None
     ) -> dict:
-        incident = runner.read_json(
-            runner.FIXTURES / "incidents" / "retry-success.json"
-        )
+        incident = runner.read_json(runner.FIXTURES / "incidents" / "retry-success.json")
         evidence = runner.collect_evidence(incident)
         packet = runner.build_hermes_request(
             run_id="20260817T000000Z-test",
@@ -96,6 +110,22 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "uncertainty": [],
             },
         )
+
+    def bound_output_dir(self, environment: dict[str, str]) -> Path:
+        config = (
+            Path(environment["HERMES_HOME"]) / "profiles" / runner.HERMES_PROFILE / "config.yaml"
+        ).read_text(encoding="utf-8")
+        for line in config.splitlines():
+            value = line.strip()
+            if not value.startswith("- "):
+                continue
+            try:
+                mount = json.loads(value[2:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(mount, str) and mount.endswith(":/output:rw"):
+                return Path(mount[: -len(":/output:rw")])
+        self.fail("bound Hermes output mount was not found")
 
     def verified_hermes_run(self, artifact_root: Path) -> Path:
         scenarios = runner.read_json(runner.FIXTURES / "scenarios.json")
@@ -162,9 +192,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             },
         )
         (run_dir / "events.jsonl").write_text(
-            json.dumps(
-                {"event": "RECEIVED", "scenario": "event-indexing-collision"}
-            )
+            json.dumps({"event": "RECEIVED", "scenario": "event-indexing-collision"})
             + "\n"
             + json.dumps(
                 {
@@ -326,9 +354,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
         return run_dir
 
     def test_request_packet_is_redacted_bounded_and_controller_owned(self) -> None:
-        incident = runner.read_json(
-            runner.FIXTURES / "incidents" / "retry-success.json"
-        )
+        incident = runner.read_json(runner.FIXTURES / "incidents" / "retry-success.json")
         evidence = runner.read_json(runner.FIXTURES / "evidence.json")
         feedback = [
             {
@@ -368,9 +394,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
         )
 
     def test_independent_diagnosis_omits_prior_diagnosis_and_plan(self) -> None:
-        incident = runner.read_json(
-            runner.FIXTURES / "incidents" / "retry-success.json"
-        )
+        incident = runner.read_json(runner.FIXTURES / "incidents" / "retry-success.json")
         packet = runner.build_hermes_request(
             run_id="independent-diagnosis",
             attempt=1,
@@ -397,9 +421,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
 
     def test_incident_allowlist_must_equal_the_trusted_scenario_policy(self) -> None:
-        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
-            "retry-success"
-        ]
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")["retry-success"]
         runner.validate_scenario_candidate_paths(
             scenario,
             ["app/subject.py"],
@@ -509,9 +531,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             runner._reported_cost(0.0, status="included", source="none"),
             0.0,
         )
-        self.assertIsNone(
-            runner._reported_cost(0.0, status="unknown", source="none")
-        )
+        self.assertIsNone(runner._reported_cost(0.0, status="unknown", source="none"))
 
     def test_manifest_hashes_only_sanitized_allowlisted_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -595,12 +615,8 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
 
     def test_execution_plan_is_bound_to_incident_test_and_path_policy(self) -> None:
-        incident = runner.read_json(
-            runner.FIXTURES / "incidents" / "event-indexing-collision.json"
-        )
-        evidence = runner.read_json(
-            runner.FIXTURES / "evidence" / "event-indexing-collision.json"
-        )
+        incident = runner.read_json(runner.FIXTURES / "incidents" / "event-indexing-collision.json")
+        evidence = runner.read_json(runner.FIXTURES / "evidence" / "event-indexing-collision.json")
         original = runner.read_json(
             runner.FIXTURES / "execution-plans" / "event-indexing-collision.json"
         )
@@ -682,12 +698,58 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     self.assertNotIn("AZURE_OPENAI_API_KEY", environment)
                     self.assertNotIn("OPENAI_API_KEY", environment)
                     self.assertNotIn("GITHUB_TOKEN", environment)
+                    self.assertNotIn("HIW_HERMES_INPUT", environment)
+                    self.assertNotIn("HIW_HERMES_TASK", environment)
+                    self.assertNotIn("HIW_HERMES_OUTPUT", environment)
                     self.assertEqual(
                         environment["HOME"], str(Path("/tmp/hiw-launcher-home").resolve())
                     )
                     self.assertEqual(
                         environment["HERMES_HOME"], str(Path("/tmp/hiw-hermes-root").resolve())
                     )
+
+    def test_disposable_mount_binding_retains_no_host_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_profile = root / "installed-profile"
+            source_profile.mkdir()
+            input_dir = root / "input"
+            input_dir.mkdir()
+            task_path = root / "task.json"
+            task_path.write_text("{}\n", encoding="utf-8")
+            output_dir = root / "output"
+            output_dir.mkdir()
+            prepared = runner.prepare_disposable_hermes_profile(
+                root / "worker",
+                runner.HERMES_PROFILE,
+                source_profile=source_profile,
+                credential_files=(),
+            )
+
+            receipt = runner.bind_disposable_hermes_mounts(
+                prepared,
+                input_dir=input_dir,
+                task_path=task_path,
+                output_dir=output_dir,
+            )
+
+            config = (prepared["profile_dir"] / "config.yaml").read_text(encoding="utf-8")
+            self.assertNotIn("${HIW_HERMES_", config)
+            self.assertIn(json.dumps(f"{input_dir.resolve()}:/input:ro"), config)
+            self.assertIn(
+                json.dumps(f"{task_path.resolve()}:/task/sandbox_task.py:ro"),
+                config,
+            )
+            self.assertIn(json.dumps(f"{output_dir.resolve()}:/output:rw"), config)
+            self.assertIn('    - "--pids-limit=256"', config)
+            self.assertTrue(receipt["bound"])
+            self.assertFalse(receipt["host_paths_retained"])
+            serialized = json.dumps(receipt)
+            self.assertNotIn(str(root.resolve()), serialized)
+            self.assertEqual(
+                receipt["mounts"],
+                ["/input:ro", "/task/sandbox_task.py:ro", "/output:rw"],
+            )
 
     def test_disposable_profile_copies_only_allowlisted_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -718,10 +780,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             self.assertFalse((profile / "state.db").exists())
             self.assertFalse((profile / "logs").exists())
             self.assertTrue(
-                all(
-                    (profile / item).is_dir()
-                    for item in runner.HERMES_CACHE_DIRECTORIES
-                )
+                all((profile / item).is_dir() for item in runner.HERMES_CACHE_DIRECTORIES)
             )
 
             cleanup = runner.cleanup_disposable_hermes_profile(prepared)
@@ -801,16 +860,12 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
     def test_patch_policy_rejects_mode_change_and_oversize(self) -> None:
         mode_change = (
-            "diff --git a/app/subject.py b/app/subject.py\n"
-            "old mode 100644\n"
-            "new mode 100755\n"
+            "diff --git a/app/subject.py b/app/subject.py\nold mode 100644\nnew mode 100755\n"
         ).encode()
         with self.assertRaisesRegex(runner.PolicyDenied, "mode change"):
             runner.validate_hermes_patch_bytes(mode_change)
         with self.assertRaisesRegex(runner.PolicyDenied, "128 KiB"):
-            runner.validate_hermes_patch_bytes(
-                b"x" * (runner.MAX_HERMES_PATCH_BYTES + 1)
-            )
+            runner.validate_hermes_patch_bytes(b"x" * (runner.MAX_HERMES_PATCH_BYTES + 1))
         too_many_paths = "".join(
             (
                 f"diff --git a/app/file_{number}.py b/app/file_{number}.py\n"
@@ -849,7 +904,8 @@ class HermesCandidateProviderTests(unittest.TestCase):
             def invoke(args, *, cwd, environment, timeout):
                 observed["args"] = args
                 observed["environment"] = environment
-                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                output_dir = self.bound_output_dir(environment)
+                sandbox = output_dir / "workspace"
                 subject = sandbox / "app" / "subject.py"
                 subject.write_text(
                     subject.read_text(encoding="utf-8").replace(
@@ -859,7 +915,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 runner.write_json(
-                    Path(environment["HIW_HERMES_OUTPUT"]) / "proposal.json",
+                    output_dir / "proposal.json",
                     {
                         "schema_version": 1,
                         "attempt": 1,
@@ -915,9 +971,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
             self.assertTrue(candidate.patch_path.is_file())
             self.assertTrue((artifact_dir / "attempt-1-hermes-request.json").is_file())
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "CANDIDATE_RETURNED")
             self.assertTrue(execution["cleanup"]["complete"])
             self.assertTrue(execution["cleanup"]["profile_state"]["complete"])
@@ -948,7 +1002,8 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
             def invoke(args, *, cwd, environment, timeout):
                 del cwd, timeout
-                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                output_dir = self.bound_output_dir(environment)
+                sandbox = output_dir / "workspace"
                 subject = sandbox / "app" / "subject.py"
                 subject.write_text(
                     subject.read_text(encoding="utf-8").replace(
@@ -958,7 +1013,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.write_ready_proposal(
-                    Path(environment["HIW_HERMES_OUTPUT"]),
+                    output_dir,
                     changed_paths=["app/different.py"],
                 )
                 return subprocess.CompletedProcess(
@@ -997,9 +1052,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     )
 
             self.assertFalse((artifact_dir / "attempt-1-hermes.patch").exists())
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
 
     def test_real_provider_rejects_unqualified_runtime_before_invocation(self) -> None:
@@ -1028,9 +1081,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 ),
                 mock.patch.object(runner, "run_hermes_process") as invoke,
                 mock.patch.object(runner, "hermes_container_ids", return_value=set()),
-                self.installed_profile_patch(
-                    Path(temporary), runtime_identity=unqualified
-                ),
+                self.installed_profile_patch(Path(temporary), runtime_identity=unqualified),
                 mock.patch.object(
                     runner,
                     "cleanup_hermes_containers",
@@ -1053,9 +1104,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     )
 
             invoke.assert_not_called()
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
             self.assertFalse(execution["runtime_identity"]["qualified"])
             self.assertTrue(execution["cleanup"]["complete"])
@@ -1079,13 +1128,9 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 mock.patch.object(
                     runner,
                     "hermes_container_ids",
-                    side_effect=runner.FlowError(
-                        "Docker container enumeration failed"
-                    ),
+                    side_effect=runner.FlowError("Docker container enumeration failed"),
                 ),
-                mock.patch.object(
-                    runner, "prepare_disposable_hermes_profile"
-                ) as prepare,
+                mock.patch.object(runner, "prepare_disposable_hermes_profile") as prepare,
                 mock.patch.object(runner, "run_hermes_process") as invoke,
             ):
                 with self.assertRaisesRegex(
@@ -1100,9 +1145,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
             prepare.assert_not_called()
             invoke.assert_not_called()
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
             self.assertFalse(execution["cleanup"]["complete"])
             self.assertEqual(
@@ -1122,7 +1165,8 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
             def invoke(args, *, cwd, environment, timeout):
                 del cwd, timeout
-                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                output_dir = self.bound_output_dir(environment)
+                sandbox = output_dir / "workspace"
                 subject = sandbox / "app" / "subject.py"
                 subject.write_text(
                     subject.read_text(encoding="utf-8").replace(
@@ -1131,7 +1175,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                self.write_ready_proposal(Path(environment["HIW_HERMES_OUTPUT"]))
+                self.write_ready_proposal(output_dir)
                 return subprocess.CompletedProcess(
                     args,
                     0,
@@ -1176,9 +1220,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                         request=self.fixture_context(artifact_dir),
                     )
 
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
             self.assertFalse(execution["cleanup"]["complete"])
 
@@ -1192,15 +1234,17 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 provider="example-provider",
                 model="example-model",
             )
+
             def invoke(args, *, cwd, environment, timeout):
                 del cwd, timeout
-                self.write_ready_proposal(Path(environment["HIW_HERMES_OUTPUT"]))
+                self.write_ready_proposal(self.bound_output_dir(environment))
                 return subprocess.CompletedProcess(
                     args,
                     0,
                     '{"status":"success"}\n',
                     "\nsession_id: 20260817_120000_ab12cd\n",
                 )
+
             with (
                 mock.patch.object(
                     runner.shutil,
@@ -1231,9 +1275,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
             self.assertEqual(runner.tree_digest(workspace), before)
             self.assertFalse((artifact_dir / "attempt-1-hermes.patch").exists())
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
 
     def test_missing_proposal_blocks_a_host_derived_patch(self) -> None:
@@ -1247,7 +1289,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             )
 
             def invoke(args, *, cwd, environment, timeout):
-                sandbox = Path(environment["HIW_HERMES_OUTPUT"]) / "workspace"
+                sandbox = self.bound_output_dir(environment) / "workspace"
                 subject = sandbox / "app" / "subject.py"
                 original = subject.read_text(encoding="utf-8")
                 subject.with_suffix(".py.bak").write_text(original, encoding="utf-8")
@@ -1285,9 +1327,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     },
                 ),
             ):
-                with self.assertRaisesRegex(
-                    runner.PolicyDenied, "did not write proposal.json"
-                ):
+                with self.assertRaisesRegex(runner.PolicyDenied, "did not write proposal.json"):
                     provider.create_candidate(
                         attempt=1,
                         workspace=workspace,
@@ -1295,17 +1335,13 @@ class HermesCandidateProviderTests(unittest.TestCase):
                         request=self.fixture_context(artifact_dir),
                     )
 
-            execution = runner.read_json(
-                artifact_dir / "attempt-1-hermes-execution.json"
-            )
+            execution = runner.read_json(artifact_dir / "attempt-1-hermes-execution.json")
             self.assertEqual(execution["outcome"], "FAILED")
             self.assertIn("proposal.json", execution["failure"])
             self.assertFalse((artifact_dir / "attempt-1-hermes.patch").exists())
 
     def test_cleanup_removes_only_new_container_with_exact_output_mount(self) -> None:
-        completed = subprocess.CompletedProcess(
-            ["docker", "rm", "-f", "target"], 0, "target\n", ""
-        )
+        completed = subprocess.CompletedProcess(["docker", "rm", "-f", "target"], 0, "target\n", "")
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "output"
             with (
@@ -1341,9 +1377,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 "hermes_container_ids",
                 side_effect=runner.FlowError("Docker container enumeration failed"),
             ):
-                result = runner.cleanup_hermes_containers(
-                    set(), Path(temporary), grace_seconds=0
-                )
+                result = runner.cleanup_hermes_containers(set(), Path(temporary), grace_seconds=0)
 
         self.assertFalse(result["complete"])
         self.assertEqual(
@@ -1354,20 +1388,14 @@ class HermesCandidateProviderTests(unittest.TestCase):
     def test_cleanup_fails_closed_when_container_inspection_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with (
-                mock.patch.object(
-                    runner, "hermes_container_ids", return_value={"candidate"}
-                ),
+                mock.patch.object(runner, "hermes_container_ids", return_value={"candidate"}),
                 mock.patch.object(
                     runner,
                     "hermes_container_has_output_mount",
-                    side_effect=runner.FlowError(
-                        "Docker container inspection failed"
-                    ),
+                    side_effect=runner.FlowError("Docker container inspection failed"),
                 ),
             ):
-                result = runner.cleanup_hermes_containers(
-                    set(), Path(temporary), grace_seconds=0
-                )
+                result = runner.cleanup_hermes_containers(set(), Path(temporary), grace_seconds=0)
 
         self.assertFalse(result["complete"])
         self.assertEqual(
@@ -1398,6 +1426,89 @@ class HermesCandidateProviderTests(unittest.TestCase):
         killpg.assert_called_once_with(4321, runner.signal.SIGTERM)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
+    def test_gateway_readiness_discards_the_attach_ticket(self) -> None:
+        receipt = {
+            "state": "ready",
+            "reason_code": None,
+            "client_code_sha": runner.HERMES_QUALIFIED_REVISION,
+            "ticket": "ephemeral-secret-ticket",
+        }
+        completed = subprocess.CompletedProcess(
+            ["hermes", "gateway", "attach"],
+            0,
+            json.dumps(receipt),
+            "",
+        )
+        with mock.patch.object(runner, "run_hermes_process", return_value=completed):
+            evidence = runner.prepare_hermes_gateway(
+                "hermes",
+                runner.HERMES_PROFILE,
+                environment={"PATH": ""},
+                timeout=30,
+            )
+
+        self.assertTrue(evidence["ready"])
+        self.assertFalse(evidence["attach_ticket_retained"])
+        self.assertNotIn("ticket", evidence)
+        self.assertNotIn("ephemeral-secret-ticket", json.dumps(evidence))
+
+    def test_gateway_stop_targets_all_profiles_in_disposable_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner.write_json(
+                root / "gateway_state.json",
+                {"pid": 999_999_999, "gateway_state": "running"},
+            )
+            completed = subprocess.CompletedProcess(
+                ["hermes", "gateway", "stop", "--all", "--yes"],
+                0,
+                "stopped\n",
+                "",
+            )
+            with mock.patch.object(runner, "run_hermes_process", return_value=completed) as invoke:
+                evidence = runner.stop_hermes_gateway(
+                    "hermes",
+                    runner.HERMES_PROFILE,
+                    environment={"HERMES_HOME": str(root)},
+                )
+
+        self.assertTrue(evidence["complete"])
+        self.assertTrue(evidence["gateway_pid_observed"])
+        self.assertTrue(evidence["gateway_pid_stopped"])
+        self.assertEqual(
+            invoke.call_args.args[0],
+            ["hermes", "gateway", "stop", "--all", "--yes"],
+        )
+
+    def test_gateway_stop_requires_an_observed_pid(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["hermes", "gateway", "stop", "--all", "--yes"],
+            0,
+            "stopped\n",
+            "",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for state in (None, "{not-json"):
+                state_path = root / "gateway_state.json"
+                state_path.unlink(missing_ok=True)
+                if state is not None:
+                    state_path.write_text(state, encoding="utf-8")
+                with mock.patch.object(
+                    runner,
+                    "run_hermes_process",
+                    return_value=completed,
+                ):
+                    evidence = runner.stop_hermes_gateway(
+                        "hermes",
+                        runner.HERMES_PROFILE,
+                        environment={"HERMES_HOME": str(root)},
+                    )
+
+                self.assertFalse(evidence["complete"])
+                self.assertFalse(evidence["gateway_pid_observed"])
+                self.assertFalse(evidence["gateway_pid_stopped"])
+
     def test_controller_feedback_is_carried_to_second_attempt(self) -> None:
         class RecordingFixtureProvider(runner.FixtureCandidateProvider):
             def __init__(self) -> None:
@@ -1416,6 +1527,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             provider = RecordingFixtureProvider()
+
             def independent_verify(_run_dir, _patch, digest, _deadline, **_kwargs):
                 return {
                     "accepted": True,
@@ -1767,9 +1879,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             runner.write_json(usage_path, usage)
             execution_path = run_dir / "attempt-1-hermes-execution.json"
             execution = runner.read_json(execution_path)
-            execution["usage_sha256"] = runner.hashlib.sha256(
-                usage_path.read_bytes()
-            ).hexdigest()
+            execution["usage_sha256"] = runner.hashlib.sha256(usage_path.read_bytes()).hexdigest()
             runner.write_json(execution_path, execution)
             runner.write_json(
                 run_dir / "hermes-usage-summary.json",
@@ -1796,9 +1906,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
             runner.write_json(usage_path, usage)
             execution_path = run_dir / "attempt-1-hermes-execution.json"
             execution = runner.read_json(execution_path)
-            execution["usage_sha256"] = runner.hashlib.sha256(
-                usage_path.read_bytes()
-            ).hexdigest()
+            execution["usage_sha256"] = runner.hashlib.sha256(usage_path.read_bytes()).hexdigest()
             runner.write_json(execution_path, execution)
             runner.write_json(
                 run_dir / "hermes-usage-summary.json",
@@ -1996,7 +2104,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                         args,
                         0,
                         (
-                            "Hermes Agent v0.20.6 (test) · upstream moving123\n"
+                            "Hermes Agent v0.23.1 (test) · upstream moving123\n"
                             f"Install directory: {install_root}\n"
                         ),
                         "",
@@ -2032,7 +2140,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         args,
                         0,
-                        f"Hermes Agent v0.20.6\nInstall directory: {install_root}\n",
+                        f"Hermes Agent v0.23.1\nInstall directory: {install_root}\n",
                         "",
                     )
                 if args[-2:] == ["rev-parse", "HEAD"]:
@@ -2066,7 +2174,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         args,
                         0,
-                        f"Hermes Agent v0.20.6\nInstall directory: {install_root}\n",
+                        f"Hermes Agent v0.23.1\nInstall directory: {install_root}\n",
                         "",
                     )
                 if args[-2:] == ["rev-parse", "HEAD"]:
@@ -2074,9 +2182,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                         args, 0, runner.HERMES_QUALIFIED_REVISION + "\n", ""
                     )
                 if "status" in args:
-                    return subprocess.CompletedProcess(
-                        args, 0, "?? sitecustomize.py\n", ""
-                    )
+                    return subprocess.CompletedProcess(args, 0, "?? sitecustomize.py\n", "")
                 raise AssertionError(f"unexpected command: {args}")
 
             with (
@@ -2119,7 +2225,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 runner,
                 "inspect_hermes_runtime",
                 return_value={
-                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "version_line": "Hermes Agent v0.23.1 (test)",
                     "qualified": True,
                     "problems": [],
                 },
@@ -2173,13 +2279,11 @@ class HermesCandidateProviderTests(unittest.TestCase):
         self.assertTrue(valid_contract["ok"])
 
     def test_service_stack_preflight_checks_every_pinned_runtime_image(self) -> None:
-        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")[
-            "event-indexing-collision"
-        ]
+        scenario = runner.read_json(runner.FIXTURES / "scenarios.json")["event-indexing-collision"]
         repository = runner.scenario_repository(scenario)
         missing_image = (
-            "postgres:14.24-alpine@sha256:"
-            "727876d274666da0b92a445390ba093c84b8e9f8343e1c53cd4e9a7ab2d85310"
+            "postgres:14.25-alpine@sha256:"
+            "e7d9e6aac7fe3232f7661da103aebc0ce38b04105b46af5e9edd5ef6bc343f20"
         )
 
         def command(args, **_kwargs):
@@ -2342,7 +2446,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 runner,
                 "inspect_hermes_runtime",
                 return_value={
-                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "version_line": "Hermes Agent v0.23.1 (test)",
                     "qualified": True,
                     "problems": [],
                 },
@@ -2373,7 +2477,7 @@ class HermesCandidateProviderTests(unittest.TestCase):
                 runner,
                 "inspect_hermes_runtime",
                 return_value={
-                    "version_line": "Hermes Agent v0.20.6 (test)",
+                    "version_line": "Hermes Agent v0.23.1 (test)",
                     "qualified": False,
                     "problems": [
                         "Hermes source checkout is not qualified revision "

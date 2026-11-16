@@ -9,8 +9,8 @@ import json
 import os
 import re
 import shlex
-import signal
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -22,7 +22,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
-
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = PACKAGE_ROOT / "fixtures"
@@ -100,9 +99,7 @@ if not isinstance(EXPECTED_REPOSITORY, str) or not re.fullmatch(
     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", EXPECTED_REPOSITORY
 ):
     raise RuntimeError("trusted workflow policy repository id is invalid")
-ALLOWED_SERVICES = _policy_string_list(
-    REPOSITORY_POLICY["allowed_services"], "allowed services"
-)
+ALLOWED_SERVICES = _policy_string_list(REPOSITORY_POLICY["allowed_services"], "allowed services")
 ALLOWED_ENVIRONMENTS = _policy_string_list(
     REPOSITORY_POLICY["allowed_environments"], "allowed environments"
 )
@@ -110,9 +107,7 @@ ALLOWED_PATCH_PREFIXES = _policy_string_list(
     REPOSITORY_POLICY["allowed_patch_prefixes"], "allowed patch prefixes"
 )
 if any(
-    prefix.startswith(("/", "."))
-    or not prefix.endswith("/")
-    or ".." in Path(prefix).parts
+    prefix.startswith(("/", ".")) or not prefix.endswith("/") or ".." in Path(prefix).parts
     for prefix in ALLOWED_PATCH_PREFIXES
 ):
     raise RuntimeError("trusted workflow policy allowed patch prefix is unsafe")
@@ -150,10 +145,10 @@ if not isinstance(HERMES_SKILL, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", HER
     raise RuntimeError("trusted workflow policy Hermes skill is invalid")
 HERMES_REQUEST_VERSION = 1
 HERMES_PROPOSAL_VERSION = 1
-HERMES_REQUIRED_VERSION = "0.20.6"
-HERMES_QUALIFIED_REVISION = "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-HERMES_PYPROJECT_SHA256 = "9b6d41aca6d908e5af2f90a335b1c2b7eeaf8e3ce667b5a823a73e8643c56c75"
-HERMES_LOCK_SHA256 = "5a9276183671e997c2213ede18b9cda4920e1cf57616219a3b08ddebda3281ab"
+HERMES_REQUIRED_VERSION = "0.23.1"
+HERMES_QUALIFIED_REVISION = "3b421578588243f920886e6fe79a6faa87ea026e"
+HERMES_PYPROJECT_SHA256 = "ee825ad304ad685625c8878cd34b7923ec64579cdc08e646b84b76ba3d4c1cfc"
+HERMES_LOCK_SHA256 = "d0ae8bfd20db7a8ca0e75418df718315c58088b120366227cc62ee8fe25d4274"
 HERMES_PROFILE_SOURCE = PACKAGE_ROOT / "hermes-profile"
 HERMES_CREDENTIAL_FILES = (".env", "auth.json", ".anthropic_oauth.json")
 HERMES_CREDENTIAL_ENV_NAME = re.compile(
@@ -168,14 +163,15 @@ HERMES_CACHE_DIRECTORIES = (
     "cache/web",
     "cache/delegation",
     "cache/spillover",
+    "cache/generated",
     "images",
     "attachments",
+    "composer-pastes",
 )
 MAX_HERMES_ATTEMPT_SECONDS = float(
-    _bounded_policy_int(
-        HERMES_POLICY["maximum_attempt_seconds"], 1, 900, "maximum attempt seconds"
-    )
+    _bounded_policy_int(HERMES_POLICY["maximum_attempt_seconds"], 1, 900, "maximum attempt seconds")
 )
+MAX_HERMES_GATEWAY_START_SECONDS = min(240.0, MAX_HERMES_ATTEMPT_SECONDS)
 MAX_HERMES_REQUEST_BYTES = 128 * 1024
 MAX_HERMES_PROPOSAL_BYTES = 32 * 1024
 MAX_HERMES_PATCH_BYTES = 128 * 1024
@@ -203,8 +199,7 @@ if len(HERMES_REQUIRED_TEST_ARGV) > 20 or any(
     raise RuntimeError("trusted workflow policy required test argv is too large")
 HERMES_REQUIRED_TEST = shlex.join(HERMES_REQUIRED_TEST_ARGV)
 CANDIDATE_TEST_IMAGE = (
-    "python:3.12-alpine@sha256:"
-    "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+    "python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
 )
 CANDIDATE_TEST_ENVIRONMENT = (
     "HOME=/tmp",
@@ -531,9 +526,7 @@ def aggregate_hermes_usage(run_dir: Path) -> dict[str, Any] | None:
     complete = all(record.get("available") is True for record in records)
     totals = {
         field: sum(
-            int(record.get(field, 0))
-            for record in records
-            if record.get("available") is True
+            int(record.get(field, 0)) for record in records if record.get("available") is True
         )
         for field in numeric_fields
     }
@@ -824,11 +817,7 @@ def build_hermes_request(
             min(MAX_HERMES_ATTEMPT_SECONDS, remaining_seconds(deadline)), 3
         ),
         "incident": {
-            **{
-                key: incident[key]
-                for key in HERMES_REQUEST_INCIDENT_FIELDS
-                if key in incident
-            },
+            **{key: incident[key] for key in HERMES_REQUEST_INCIDENT_FIELDS if key in incident},
             "content_trust": "untrusted_data",
         },
         "evidence": {
@@ -888,8 +877,7 @@ def build_hermes_request(
             if not isinstance(path, str) or not path.startswith(ALLOWED_PATCH_PREFIXES):
                 raise PolicyDenied("Hermes execution plan contains a forbidden path")
             if not all(
-                isinstance(edit[key], str) and edit[key]
-                for key in ("old_fragment", "new_fragment")
+                isinstance(edit[key], str) and edit[key] for key in ("old_fragment", "new_fragment")
             ):
                 raise PolicyDenied("Hermes execution plan contains an invalid edit")
         packet["controller_approved_execution_plan"] = execution_plan
@@ -1070,10 +1058,7 @@ def validate_incident(incident: dict[str, Any]) -> None:
     missing = sorted(required - set(incident))
     if missing:
         raise PolicyDenied(f"incident missing fields: {', '.join(missing)}")
-    if (
-        type(incident["schema_version"]) is not int
-        or incident["schema_version"] != 1
-    ):
+    if type(incident["schema_version"]) is not int or incident["schema_version"] != 1:
         raise PolicyDenied("unsupported incident schema")
     if incident["repository"] != EXPECTED_REPOSITORY:
         raise PolicyDenied("repository is not allowlisted")
@@ -1115,8 +1100,7 @@ def validate_incident_path_allowlist(
         path
         for path in changed_paths
         if not any(
-            path == allowed_path
-            or (allowed_path.endswith("/") and path.startswith(allowed_path))
+            path == allowed_path or (allowed_path.endswith("/") and path.startswith(allowed_path))
             for allowed_path in allowed_paths
         )
     )
@@ -1394,10 +1378,7 @@ def validate_held_out_retry_rejection(test_result: dict[str, Any]) -> None:
         or len(checks) < 2
         or not isinstance(checks[0], dict)
         or checks[0].get("passed") is not True
-        or not any(
-            isinstance(check, dict) and check.get("passed") is False
-            for check in checks[1:]
-        )
+        or not any(isinstance(check, dict) and check.get("passed") is False for check in checks[1:])
         or test_result.get("passed") is not False
     ):
         raise PolicyDenied(
@@ -1650,6 +1631,115 @@ def run_hermes_process(
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
+def prepare_hermes_gateway(
+    hermes: str,
+    profile: str,
+    *,
+    environment: dict[str, str],
+    timeout: float,
+) -> dict[str, Any]:
+    """Start the disposable v0.23 gateway without retaining its attach ticket."""
+    bounded_timeout = min(MAX_HERMES_GATEWAY_START_SECONDS, max(0.1, timeout))
+    started = time.monotonic()
+    try:
+        completed = run_hermes_process(
+            [
+                hermes,
+                "-p",
+                profile,
+                "gateway",
+                "attach",
+                "--start",
+                "--timeout",
+                f"{bounded_timeout:.3f}",
+            ],
+            cwd=PACKAGE_ROOT,
+            environment=environment,
+            timeout=bounded_timeout + 5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FlowError("Hermes disposable gateway readiness timed out") from exc
+    if completed.returncode != 0:
+        raise FlowError(
+            "Hermes disposable gateway did not become ready: "
+            f"{redact_text(completed.stderr)[-1000:]}"
+        )
+    try:
+        receipt = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise FlowError("Hermes disposable gateway returned invalid readiness evidence") from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("state") != "ready"
+        or not isinstance(receipt.get("ticket"), str)
+        or not receipt["ticket"]
+        or receipt.get("client_code_sha") != HERMES_QUALIFIED_REVISION
+    ):
+        raise FlowError("Hermes disposable gateway readiness evidence was not qualified")
+    return {
+        "ready": True,
+        "state": "ready",
+        "reason_code": receipt.get("reason_code"),
+        "client_code_sha": receipt["client_code_sha"],
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "attach_ticket_retained": False,
+    }
+
+
+def stop_hermes_gateway(
+    hermes: str,
+    profile: str,
+    *,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    """Stop only the gateway rooted in the disposable Hermes home."""
+    del profile
+    gateway_pid: int | None = None
+    hermes_root = environment.get("HERMES_HOME")
+    if isinstance(hermes_root, str) and hermes_root:
+        try:
+            state = json.loads(
+                (Path(hermes_root) / "gateway_state.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            state = None
+        if (
+            isinstance(state, dict)
+            and isinstance(state.get("pid"), int)
+            and not isinstance(state["pid"], bool)
+            and state["pid"] > 1
+        ):
+            gateway_pid = state["pid"]
+    try:
+        completed = run_hermes_process(
+            [hermes, "gateway", "stop", "--all", "--yes"],
+            cwd=PACKAGE_ROOT,
+            environment=environment,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return {"requested": True, "complete": False, "reason": "timeout"}
+    verified_stopped = False
+    if gateway_pid is not None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(gateway_pid, 0)
+            except ProcessLookupError:
+                verified_stopped = True
+                break
+            except PermissionError:
+                break
+            time.sleep(0.1)
+    return {
+        "requested": True,
+        "complete": (completed.returncode == 0 and gateway_pid is not None and verified_stopped),
+        "returncode": completed.returncode,
+        "gateway_pid_observed": gateway_pid is not None,
+        "gateway_pid_stopped": verified_stopped,
+    }
+
+
 def _validate_profile_distribution_tree(source: Path) -> None:
     """Reject links, special files, and oversized files before copying a profile."""
     if source.is_symlink() or not source.is_dir():
@@ -1731,9 +1821,8 @@ def prepare_disposable_hermes_profile(
     """
     if HERMES_PROFILE_PATTERN.fullmatch(profile) is None:
         raise PolicyDenied("Hermes profile name is invalid")
-    if (
-        len(credential_files) != len(set(credential_files))
-        or any(item not in HERMES_CREDENTIAL_FILES for item in credential_files)
+    if len(credential_files) != len(set(credential_files)) or any(
+        item not in HERMES_CREDENTIAL_FILES for item in credential_files
     ):
         raise PolicyDenied("Hermes credential bridge is outside the compiled allowlist")
     _validate_profile_distribution_tree(HERMES_PROFILE_SOURCE)
@@ -1778,6 +1867,60 @@ def prepare_disposable_hermes_profile(
     }
 
 
+def bind_disposable_hermes_mounts(
+    prepared: dict[str, Any],
+    *,
+    input_dir: Path,
+    task_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Materialize the three controller-owned mounts in a copied profile.
+
+    Hermes v0.23 runs ``chat`` through a separately started gateway. Ambient
+    launcher variables are deliberately not relied on across that boundary.
+    The retained receipt proves that the exact template was bound without
+    retaining any host path.
+    """
+    profile_dir = prepared.get("profile_dir")
+    if not isinstance(profile_dir, Path):
+        raise PolicyDenied("disposable Hermes profile path is missing")
+    config_path = profile_dir / "config.yaml"
+    if config_path.is_symlink() or not config_path.is_file():
+        raise PolicyDenied("disposable Hermes profile config is not a regular file")
+
+    mounts = (
+        ("HIW_HERMES_INPUT", input_dir, "/input:ro", "directory"),
+        ("HIW_HERMES_TASK", task_path, "/task/sandbox_task.py:ro", "file"),
+        ("HIW_HERMES_OUTPUT", output_dir, "/output:rw", "directory"),
+    )
+    text = config_path.read_text(encoding="utf-8")
+    for name, source, destination, kind in mounts:
+        resolved = source.resolve()
+        source_text = str(resolved)
+        if any(character in source_text for character in ("\x00", "\n", "\r", ":")):
+            raise PolicyDenied("Hermes mount source path is unsafe")
+        if source.is_symlink() or (kind == "file" and not resolved.is_file()):
+            raise PolicyDenied("Hermes mount source is not the required regular file")
+        if kind == "directory" and not resolved.is_dir():
+            raise PolicyDenied("Hermes mount source is not the required directory")
+        placeholder = json.dumps(f"${{{name}}}:{destination}")
+        if text.count(placeholder) != 1:
+            raise PolicyDenied("Hermes mount template is missing or repeated")
+        text = text.replace(
+            placeholder,
+            json.dumps(f"{source_text}:{destination}"),
+            1,
+        )
+
+    config_path.write_text(text, encoding="utf-8")
+    return {
+        "bound": True,
+        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "mounts": ["/input:ro", "/task/sandbox_task.py:ro", "/output:rw"],
+        "host_paths_retained": False,
+    }
+
+
 def cleanup_disposable_hermes_profile(prepared: dict[str, Any]) -> dict[str, Any]:
     """Delete the isolated Hermes state and report a fail-closed result."""
     remaining: list[str] = []
@@ -1787,13 +1930,18 @@ def cleanup_disposable_hermes_profile(prepared: dict[str, Any]) -> dict[str, Any
         if not isinstance(path, Path):
             remaining.append(label)
             continue
-        try:
-            shutil.rmtree(path)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            remaining.append(label)
-            continue
+        cleanup_deadline = time.monotonic() + 15
+        while True:
+            try:
+                shutil.rmtree(path)
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                if time.monotonic() >= cleanup_deadline:
+                    remaining.append(label)
+                    break
+                time.sleep(0.1)
         if path.exists():
             remaining.append(label)
         else:
@@ -1819,7 +1967,7 @@ def hermes_process_environment(
     Provider authentication must already exist in the selected Hermes profile. The
     controller never copies provider keys from the ambient process into this child.
     """
-    del provider
+    del input_dir, task_path, output_dir, provider
     return {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(launcher_home.resolve()),
@@ -1833,9 +1981,6 @@ def hermes_process_environment(
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "NO_COLOR": "1",
         "HERMES_SIGTERM_GRACE": "0.5",
-        "HIW_HERMES_INPUT": str(input_dir.resolve()),
-        "HIW_HERMES_TASK": str(task_path.resolve()),
-        "HIW_HERMES_OUTPUT": str(output_dir.resolve()),
     }
 
 
@@ -1907,11 +2052,7 @@ def shadow_git_diff(workspace: Path, git_dir: Path, deadline: float) -> bytes:
         timeout=min(20, remaining_seconds(deadline)),
         text=False,
     )
-    untracked = [
-        item.decode("utf-8")
-        for item in untracked_result.stdout.split(b"\0")
-        if item
-    ]
+    untracked = [item.decode("utf-8") for item in untracked_result.stdout.split(b"\0") if item]
     if untracked:
         checked_git(
             [*prefix, "add", "-N", "--", *untracked],
@@ -2048,6 +2189,8 @@ class HermesCandidateProvider:
         started = time.monotonic()
         disposable_profile: dict[str, Any] | None = None
         completed: subprocess.CompletedProcess[str] | None = None
+        environment: dict[str, str] | None = None
+        gateway_attempted = False
         session_id: str | None = None
         proposal: dict[str, Any] | None = None
         proposal_error: str | None = None
@@ -2072,9 +2215,13 @@ class HermesCandidateProvider:
                 worker_root,
                 self.profile,
             )
-            execution["credential_files_bridged"] = disposable_profile[
-                "credential_files"
-            ]
+            execution["credential_files_bridged"] = disposable_profile["credential_files"]
+            execution["mount_binding"] = bind_disposable_hermes_mounts(
+                disposable_profile,
+                input_dir=workspace,
+                task_path=request_path,
+                output_dir=output_dir,
+            )
             environment = hermes_process_environment(
                 input_dir=workspace,
                 task_path=request_path,
@@ -2092,6 +2239,16 @@ class HermesCandidateProvider:
                     "Hermes runtime failed qualification immediately before execution"
                     + (f": {detail}" if detail else "")
                 )
+            gateway_attempted = True
+            execution["gateway_start"] = prepare_hermes_gateway(
+                hermes,
+                self.profile,
+                environment=environment,
+                timeout=min(
+                    MAX_HERMES_GATEWAY_START_SECONDS,
+                    max(0.1, remaining_seconds(deadline) - 5),
+                ),
+            )
             completed = run_hermes_process(
                 invocation,
                 cwd=PACKAGE_ROOT,
@@ -2100,8 +2257,7 @@ class HermesCandidateProvider:
             )
             if completed.returncode != 0:
                 raise FlowError(
-                    "Hermes candidate invocation failed: "
-                    f"{redact_text(completed.stderr)[-1000:]}"
+                    f"Hermes candidate invocation failed: {redact_text(completed.stderr)[-1000:]}"
                 )
             session_id = parse_hermes_session_id(completed.stderr)
             usage: dict[str, Any] | None = None
@@ -2148,9 +2304,7 @@ class HermesCandidateProvider:
             if proposal["status"] != "candidate_ready":
                 raise PolicyDenied("Hermes strict proposal is not candidate_ready")
             if proposal["changed_paths"] != changed_paths:
-                raise PolicyDenied(
-                    "Hermes proposal changed paths do not match the host diff"
-                )
+                raise PolicyDenied("Hermes proposal changed paths do not match the host diff")
             patch_path.write_bytes(patch_payload)
             applied = apply_candidate(workspace, patch_path, deadline)
             record = {
@@ -2194,6 +2348,15 @@ class HermesCandidateProvider:
             raise
         finally:
             active_error = sys.exc_info()[0] is not None
+            gateway_cleanup = (
+                stop_hermes_gateway(
+                    hermes,
+                    self.profile,
+                    environment=environment,
+                )
+                if gateway_attempted and environment is not None
+                else {"requested": False, "complete": True}
+            )
             try:
                 cleanup = cleanup_hermes_containers(
                     containers_before,
@@ -2205,9 +2368,7 @@ class HermesCandidateProvider:
                     "scoped_container_ids": [],
                     "removed_container_ids": [],
                     "remaining_container_ids": [],
-                    "observation_errors": [
-                        f"unexpected cleanup error: {type(exc).__name__}"
-                    ],
+                    "observation_errors": [f"unexpected cleanup error: {type(exc).__name__}"],
                     "complete": False,
                 }
             profile_cleanup = (
@@ -2227,9 +2388,11 @@ class HermesCandidateProvider:
             if not worker_cleanup["complete"]:
                 worker_cleanup["remaining"] = ["worker_root"]
             cleanup["profile_state"] = profile_cleanup
+            cleanup["gateway"] = gateway_cleanup
             cleanup["worker_directory"] = worker_cleanup
             cleanup["complete"] = bool(
                 cleanup["complete"]
+                and gateway_cleanup["complete"]
                 and profile_cleanup["complete"]
                 and worker_cleanup["complete"]
             )
@@ -2317,9 +2480,7 @@ def _candidate_test_container_argv(
 
 def _docker_reference_absent(result: subprocess.CompletedProcess[str]) -> bool:
     output = result.stdout.lower()
-    return result.returncode != 0 and (
-        "no such object" in output or "no such container" in output
-    )
+    return result.returncode != 0 and ("no such object" in output or "no such container" in output)
 
 
 def _cleanup_candidate_test_container(
@@ -2497,9 +2658,7 @@ def controller_test(
     return {
         "command": f"python {verifier.relative_to(PACKAGE_ROOT)} --repository <workspace>",
         "exit_code": (
-            result.returncode
-            if result.returncode != 0
-            else (0 if trusted_completed else 1)
+            result.returncode if result.returncode != 0 else (0 if trusted_completed else 1)
         ),
         "process_exit_code": result.returncode,
         "passed": trusted_completed,
@@ -2556,9 +2715,11 @@ def _dockerfile_base_images(path: Path) -> list[str]:
     resolved = path.resolve()
     package_root = PACKAGE_ROOT.resolve()
     if (
-        resolved != package_root
-        and package_root not in resolved.parents
-    ) or path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+        (resolved != package_root and package_root not in resolved.parents)
+        or path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > 256 * 1024
+    ):
         raise PolicyDenied("service-stack Dockerfile is outside the package or irregular")
     images: list[str] = []
     aliases: set[str] = set()
@@ -2610,10 +2771,7 @@ def service_stack_environment_problems(
         extra_env=compose_environment,
     )
     if config.returncode != 0:
-        return [
-            "Compose configuration is invalid: "
-            + redact_text(config.stdout)[-1000:]
-        ]
+        return ["Compose configuration is invalid: " + redact_text(config.stdout)[-1000:]]
     try:
         resolved_config = json.loads(config.stdout)
     except json.JSONDecodeError:
@@ -2622,9 +2780,7 @@ def service_stack_environment_problems(
     if not isinstance(services, dict) or not services:
         return ["Compose configuration has no services"]
     if compose_service not in services:
-        return [
-            f"declared Compose verification service is missing: {compose_service}"
-        ]
+        return [f"declared Compose verification service is missing: {compose_service}"]
 
     images: set[str] = set()
     try:
@@ -2634,12 +2790,11 @@ def service_stack_environment_problems(
             image = service.get("image")
             build = service.get("build")
             if image is not None:
-                if not isinstance(image, str) or re.fullmatch(
-                    r"[^\s@]+@sha256:[0-9a-f]{64}", image
-                ) is None:
-                    raise PolicyDenied(
-                        f"Compose service {service_name} image is not digest-pinned"
-                    )
+                if (
+                    not isinstance(image, str)
+                    or re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image) is None
+                ):
+                    raise PolicyDenied(f"Compose service {service_name} image is not digest-pinned")
                 images.add(image)
             if build is not None:
                 if isinstance(build, str):
@@ -2648,26 +2803,23 @@ def service_stack_environment_problems(
                 elif isinstance(build, dict):
                     context_value = build.get("context")
                     dockerfile_value = build.get("dockerfile", "Dockerfile")
-                    if not isinstance(context_value, str) or not isinstance(
-                        dockerfile_value, str
-                    ):
+                    if not isinstance(context_value, str) or not isinstance(dockerfile_value, str):
                         raise PolicyDenied(
                             f"Compose service {service_name} build contract is invalid"
                         )
                     context = Path(context_value)
                     dockerfile_name = dockerfile_value
                 else:
-                    raise PolicyDenied(
-                        f"Compose service {service_name} build contract is invalid"
-                    )
+                    raise PolicyDenied(f"Compose service {service_name} build contract is invalid")
                 if not context.is_absolute():
                     context = (compose_file.parent / context).resolve()
                 context = context.resolve()
                 package_root = PACKAGE_ROOT.resolve()
                 if (
-                    context != package_root
-                    and package_root not in context.parents
-                ) or context.is_symlink() or not context.is_dir():
+                    (context != package_root and package_root not in context.parents)
+                    or context.is_symlink()
+                    or not context.is_dir()
+                ):
                     raise PolicyDenied(
                         f"Compose service {service_name} build context is outside the package"
                     )
@@ -2678,9 +2830,7 @@ def service_stack_environment_problems(
                     )
                 images.update(_dockerfile_base_images(dockerfile))
             if image is None and build is None:
-                raise PolicyDenied(
-                    f"Compose service {service_name} has no image or build contract"
-                )
+                raise PolicyDenied(f"Compose service {service_name} has no image or build contract")
     except (OSError, UnicodeError, PolicyDenied) as exc:
         return [str(exc)]
 
@@ -2846,9 +2996,7 @@ def scenario_test(
     return {
         "command": " && ".join(check["command"] for check in checks),
         "exit_code": (
-            0
-            if passed
-            else next(check["exit_code"] for check in checks if not check["passed"])
+            0 if passed else next(check["exit_code"] for check in checks if not check["passed"])
         ),
         "passed": passed,
         "output": "\n\n".join(check["output"] for check in checks)[-20000:],
@@ -2882,9 +3030,9 @@ def independent_verify(
         passed = all(check["passed"] for check in checks)
         test_result = {
             "command": " && ".join(check["command"] for check in checks),
-            "exit_code": 0 if passed else next(
-                check["exit_code"] for check in checks if not check["passed"]
-            ),
+            "exit_code": 0
+            if passed
+            else next(check["exit_code"] for check in checks if not check["passed"]),
             "passed": passed,
             "output": "\n\n".join(check["output"] for check in checks)[-16000:],
             "checks": checks,
@@ -2976,15 +3124,13 @@ def closeout(
         read_json(path) for path in sorted(run_dir.glob("attempt-*-hermes-execution.json"))
     ]
     hermes_cleanup_ok = all(
-        record.get("cleanup", {}).get("complete") is True
-        for record in hermes_execution_records
+        record.get("cleanup", {}).get("complete") is True for record in hermes_execution_records
     )
     usage_summary = aggregate_hermes_usage(run_dir)
     if usage_summary is not None:
         write_json(run_dir / "hermes-usage-summary.json", usage_summary)
     cleanup_ok = (
-        all(item["exit_code"] == 0 for item in compose_cleanup_results)
-        and hermes_cleanup_ok
+        all(item["exit_code"] == 0 for item in compose_cleanup_results) and hermes_cleanup_ok
     )
     closeout_record = {
         "at": utc_now(),
@@ -3051,9 +3197,7 @@ def run_flow(
     scenario = scenarios[scenario_name]
     required_retry_attempts = retry_contract_attempts(scenario)
     if required_retry_attempts is not None and max_attempts < required_retry_attempts:
-        raise ValueError(
-            "max attempts is below the trusted retry contract requirement"
-        )
+        raise ValueError("max attempts is below the trusted retry contract requirement")
     incident = read_json(FIXTURES / scenario["incident"])
     repository = scenario_repository(scenario)
     original_baseline_digest = tree_digest(repository)
@@ -3162,9 +3306,7 @@ def run_flow(
             )
             baseline_digest = tree_digest(workspace)
             if baseline_digest != original_baseline_digest:
-                raise PolicyDenied(
-                    "fresh attempt workspace does not match the original baseline"
-                )
+                raise PolicyDenied("fresh attempt workspace does not match the original baseline")
             candidate_packet = build_hermes_request(
                 run_id=run_id,
                 attempt=attempt,
@@ -3205,9 +3347,7 @@ def run_flow(
                 raise PolicyDenied("retry candidate digest repeats an earlier attempt")
             candidate_digests.add(candidate["candidate_digest"])
             if provider_source == "hermes-real-model":
-                execution = read_json(
-                    run_dir / f"attempt-{attempt}-hermes-execution.json"
-                )
+                execution = read_json(run_dir / f"attempt-{attempt}-hermes-execution.json")
                 session_id = execution.get("session_id")
                 if not isinstance(session_id, str):
                     raise PolicyDenied("Hermes execution session ID is missing")
@@ -3275,29 +3415,29 @@ def run_flow(
                     accepted_candidate = candidate
                     break
                 feedback_record = {
-                        "attempt": attempt,
-                        "stage": "independent_verification",
-                        "candidate_digest": candidate["candidate_digest"],
-                        "command": verification["test"]["command"],
-                        "exit_code": verification["test"]["exit_code"],
-                        "passed": False,
-                        "reason": "independent verifier rejected the exact candidate digest",
-                        "output": verification["test"]["output"],
-                    }
+                    "attempt": attempt,
+                    "stage": "independent_verification",
+                    "candidate_digest": candidate["candidate_digest"],
+                    "command": verification["test"]["command"],
+                    "exit_code": verification["test"]["exit_code"],
+                    "passed": False,
+                    "reason": "independent verifier rejected the exact candidate digest",
+                    "output": verification["test"]["output"],
+                }
                 bounded_feedback = bounded_controller_feedback([feedback_record])[0]
                 controller_feedback.append(bounded_feedback)
                 write_json(run_dir / f"attempt-{attempt}-feedback.json", bounded_feedback)
             else:
                 feedback_record = {
-                        "attempt": attempt,
-                        "stage": "controller_test",
-                        "candidate_digest": candidate["candidate_digest"],
-                        "command": test_result["command"],
-                        "exit_code": test_result["exit_code"],
-                        "passed": False,
-                        "reason": "required controller test failed",
-                        "output": test_result["output"],
-                    }
+                    "attempt": attempt,
+                    "stage": "controller_test",
+                    "candidate_digest": candidate["candidate_digest"],
+                    "command": test_result["command"],
+                    "exit_code": test_result["exit_code"],
+                    "passed": False,
+                    "reason": "required controller test failed",
+                    "output": test_result["output"],
+                }
                 bounded_feedback = bounded_controller_feedback([feedback_record])[0]
                 controller_feedback.append(bounded_feedback)
                 write_json(run_dir / f"attempt-{attempt}-feedback.json", bounded_feedback)
@@ -3308,9 +3448,7 @@ def run_flow(
                 required_retry_attempts is not None
                 and control["attempts"] != required_retry_attempts
             ):
-                raise PolicyDenied(
-                    "retry contract was not completed before delivery eligibility"
-                )
+                raise PolicyDenied("retry contract was not completed before delivery eligibility")
             control["state"] = "READY_TO_PUBLISH"
             control["outcome"] = "SUCCEEDED"
             control["candidate_digest"] = accepted_candidate["candidate_digest"]
@@ -3363,8 +3501,7 @@ def run_flow(
     expected = scenario["expected_outcome"]
     if control["outcome"] != expected:
         raise FlowError(
-            f"scenario expected {expected}, got {control['outcome']}: "
-            f"{control['failure_reason']}"
+            f"scenario expected {expected}, got {control['outcome']}: {control['failure_reason']}"
         )
     return run_dir, control
 
@@ -3454,9 +3591,7 @@ def hermes_usage_record_issues(
             for field in numeric_fields:
                 value = route.get(field)
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                    issues.append(
-                        f"{label} usage route {route_number} {field} is invalid"
-                    )
+                    issues.append(f"{label} usage route {route_number} {field} is invalid")
                     route_contract_valid = False
             if route_contract_valid:
                 route_total = (
@@ -3466,13 +3601,9 @@ def hermes_usage_record_issues(
                     + route["output_tokens"]
                 )
                 if route["total_tokens"] != route_total:
-                    issues.append(
-                        f"{label} usage route {route_number} total is inconsistent"
-                    )
+                    issues.append(f"{label} usage route {route_number} total is inconsistent")
                 if route["reasoning_tokens"] > route["output_tokens"]:
-                    issues.append(
-                        f"{label} usage route {route_number} reasoning exceeds output"
-                    )
+                    issues.append(f"{label} usage route {route_number} reasoning exceeds output")
                 for field in numeric_fields:
                     route_totals[field] += route[field]
             estimated = _reported_cost(
@@ -3487,13 +3618,9 @@ def hermes_usage_record_issues(
                 actual=True,
             )
             if route.get("estimated_cost_usd") != estimated:
-                issues.append(
-                    f"{label} usage route {route_number} estimated cost is inconsistent"
-                )
+                issues.append(f"{label} usage route {route_number} estimated cost is inconsistent")
             if route.get("actual_cost_usd") != actual:
-                issues.append(
-                    f"{label} usage route {route_number} actual cost is inconsistent"
-                )
+                issues.append(f"{label} usage route {route_number} actual cost is inconsistent")
             estimated_costs.append(estimated)
             actual_costs.append(actual)
         if route_contract_valid and any(
@@ -3522,11 +3649,7 @@ def trusted_request_incident(scenario: dict[str, Any]) -> dict[str, Any]:
     incident = read_json(FIXTURES / scenario["incident"])
     return redact(
         {
-            **{
-                key: incident[key]
-                for key in HERMES_REQUEST_INCIDENT_FIELDS
-                if key in incident
-            },
+            **{key: incident[key] for key in HERMES_REQUEST_INCIDENT_FIELDS if key in incident},
             "content_trust": "untrusted_data",
         }
     )
@@ -3557,9 +3680,7 @@ def infer_verified_scenario(
     ]
     if len(matches) > 1 and type(attempts) is int and attempts > 0:
         retry_matches = [
-            name
-            for name in matches
-            if isinstance(scenarios[name].get("retry_contract"), dict)
+            name for name in matches if isinstance(scenarios[name].get("retry_contract"), dict)
         ]
         if len(retry_matches) == 1:
             matches = retry_matches
@@ -3730,9 +3851,10 @@ def verify_hermes_attempt_chain(
         ):
             issues.append(f"Hermes runtime identity is not qualified on attempt {attempt}")
         session_id = execution.get("session_id")
-        if not isinstance(session_id, str) or HERMES_SESSION_PATTERN.fullmatch(
-            f"session_id: {session_id}"
-        ) is None:
+        if (
+            not isinstance(session_id, str)
+            or HERMES_SESSION_PATTERN.fullmatch(f"session_id: {session_id}") is None
+        ):
             issues.append(f"Hermes session ID is invalid on attempt {attempt}")
             session_id = ""
         else:
@@ -3909,9 +4031,10 @@ def verify_hermes_attempt_chain(
         else:
             if retained_summary != expected_summary:
                 issues.append("Hermes aggregate usage does not match per-attempt usage")
-            if not isinstance(retained_summary, dict) or retained_summary.get(
-                "attempt_count"
-            ) != attempts:
+            if (
+                not isinstance(retained_summary, dict)
+                or retained_summary.get("attempt_count") != attempts
+            ):
                 issues.append("Hermes aggregate usage does not cover every attempt")
     return sorted(set(issues))
 
@@ -4111,13 +4234,15 @@ def verify_hermes_real_model_artifacts(
                     issues.append("Hermes usage session does not match execution")
                 if usage.get("available") is not True:
                     issues.append("Hermes provider-reported usage is unavailable")
-                if not isinstance(usage.get("api_call_count"), int) or usage.get(
-                    "api_call_count", 0
-                ) < 1:
+                if (
+                    not isinstance(usage.get("api_call_count"), int)
+                    or usage.get("api_call_count", 0) < 1
+                ):
                     issues.append("Hermes usage has no API calls")
-                if not isinstance(usage.get("total_tokens"), int) or usage.get(
-                    "total_tokens", 0
-                ) < 1:
+                if (
+                    not isinstance(usage.get("total_tokens"), int)
+                    or usage.get("total_tokens", 0) < 1
+                ):
                     issues.append("Hermes usage has no provider-reported tokens")
                 if usage.get("reasoning_tokens_are_subset_of_output") is not True:
                     issues.append("Hermes usage reasoning-token accounting is ambiguous")
@@ -4163,10 +4288,7 @@ def verify_hermes_real_model_artifacts(
         if verification.get("tested_digest") != accepted_digest:
             issues.append("Hermes verification tested digest does not match candidate")
         verification_test = verification.get("test")
-        if (
-            not isinstance(verification_test, dict)
-            or verification_test.get("passed") is not True
-        ):
+        if not isinstance(verification_test, dict) or verification_test.get("passed") is not True:
             issues.append("Hermes independent verification tests did not pass")
     return sorted(set(issues))
 
@@ -4204,11 +4326,7 @@ def stable_test_receipt(test: Any) -> dict[str, Any] | None:
         "output": stable_test_output(test.get("output")),
         "checks": [
             {
-                field: (
-                    stable_test_output(check[field])
-                    if field == "output"
-                    else check[field]
-                )
+                field: (stable_test_output(check[field]) if field == "output" else check[field])
                 for field in check_fields
                 if field in check
             }
@@ -4246,9 +4364,7 @@ def replay_retry_attempt_test(
         patch_payload = patch_path.read_bytes()
         patch_sha256 = hashlib.sha256(patch_payload).hexdigest()
         _, changed_paths = validate_hermes_patch_bytes(patch_payload)
-        with tempfile.TemporaryDirectory(
-            prefix=f"hiw-replay-attempt-{attempt}-"
-        ) as temporary:
+        with tempfile.TemporaryDirectory(prefix=f"hiw-replay-attempt-{attempt}-") as temporary:
             workspace = Path(temporary) / "workspace"
             shutil.copytree(scenario_repository(scenario), workspace)
             applied = apply_candidate(
@@ -4264,9 +4380,7 @@ def replay_retry_attempt_test(
                 with_docker=False,
             )
     except (OSError, FlowError, PolicyDenied, subprocess.TimeoutExpired) as exc:
-        issues.append(
-            f"retry attempt {attempt} independent replay failed: {type(exc).__name__}"
-        )
+        issues.append(f"retry attempt {attempt} independent replay failed: {type(exc).__name__}")
         return None, issues
     if candidate.get("patch_sha256") != patch_sha256:
         issues.append(f"retry attempt {attempt} patch SHA is not reproducible")
@@ -4324,8 +4438,7 @@ def verify_retry_chain(
             if not isinstance(checks[0], dict) or checks[0].get("passed") is not True:
                 issues.append("first retry attempt did not pass repository tests")
             if not any(
-                isinstance(check, dict) and check.get("passed") is False
-                for check in checks[1:]
+                isinstance(check, dict) and check.get("passed") is False for check in checks[1:]
             ):
                 issues.append("first retry attempt did not fail a controller-owned check")
         if not isinstance(first_test, dict) or first_test.get("passed") is not False:
@@ -4350,9 +4463,7 @@ def verify_retry_chain(
         replayed_tests[attempt] = replayed_test
         retained_test = result.get("test") if result is not None else None
         if stable_test_receipt(retained_test) != stable_test_receipt(replayed_test):
-            issues.append(
-                f"attempt-{attempt} retained test differs from independent replay"
-            )
+            issues.append(f"attempt-{attempt} retained test differs from independent replay")
 
     replayed_first_test = replayed_tests.get(1)
     if replayed_first_test is not None:
@@ -4383,18 +4494,13 @@ def verify_retry_chain(
         issues.append("retry feedback is not the exact bounded attempt-one result")
 
     if second_request is not None:
-        if (
-            expected_first_feedback is None
-            or second_request.get("feedback") != [expected_first_feedback]
-        ):
-            issues.append(
-                "attempt-two request does not carry exact bounded attempt-one feedback"
-            )
+        if expected_first_feedback is None or second_request.get("feedback") != [
+            expected_first_feedback
+        ]:
+            issues.append("attempt-two request does not carry exact bounded attempt-one feedback")
 
     if first_candidate is not None and second_candidate is not None:
-        if first_candidate.get("candidate_digest") == second_candidate.get(
-            "candidate_digest"
-        ):
+        if first_candidate.get("candidate_digest") == second_candidate.get("candidate_digest"):
             issues.append("retry attempts produced the same candidate digest")
 
     baseline_digests = [
@@ -4434,9 +4540,10 @@ def verify_retry_chain(
                 issues.append("retry-chain usage summary is incomplete")
             if usage_summary.get("attempt_count") != 2:
                 issues.append("retry-chain usage summary does not cover both attempts")
-            if not isinstance(usage_summary.get("total_tokens"), int) or usage_summary.get(
-                "total_tokens", 0
-            ) < 1:
+            if (
+                not isinstance(usage_summary.get("total_tokens"), int)
+                or usage_summary.get("total_tokens", 0) < 1
+            ):
                 issues.append("retry-chain usage summary has no tokens")
             if usage_summary.get("reasoning_tokens_are_subset_of_output") is not True:
                 issues.append("retry-chain usage reasoning-token accounting is ambiguous")
@@ -4523,8 +4630,10 @@ def verify_attempt_request_controls(
             issues.append(
                 f"retained request did not require a strict proposal on attempt {attempt}"
             )
-        if independent and isinstance(request, dict) and (
-            "diagnosis" in request or "controller_approved_execution_plan" in request
+        if (
+            independent
+            and isinstance(request, dict)
+            and ("diagnosis" in request or "controller_approved_execution_plan" in request)
         ):
             issues.append(
                 f"independent retained request contains prior conclusions on attempt {attempt}"
@@ -4541,15 +4650,11 @@ def verify_attempt_request_controls(
                 continue
             if mounted_request != request:
                 issues.append(f"retained mounted request differs on attempt {attempt}")
-            if (
-                not isinstance(mounted_request, dict)
-                or mounted_request.get("run_id") != control.get("run_id")
-            ):
+            if not isinstance(mounted_request, dict) or mounted_request.get(
+                "run_id"
+            ) != control.get("run_id"):
                 issues.append(f"mounted request run ID differs on attempt {attempt}")
-            if (
-                not isinstance(mounted_request, dict)
-                or mounted_request.get("attempt") != attempt
-            ):
+            if not isinstance(mounted_request, dict) or mounted_request.get("attempt") != attempt:
                 issues.append(f"mounted request attempt differs on attempt {attempt}")
     return sorted(set(issues))
 
@@ -4806,13 +4911,9 @@ def inspect_hermes_runtime(hermes: str = "hermes") -> dict[str, Any]:
             identity["problems"].append(
                 f"Hermes source checkout is not qualified revision {HERMES_QUALIFIED_REVISION}"
             )
-    identity["checkout_clean"] = (
-        clean_result.returncode == 0 and not clean_result.stdout.strip()
-    )
+    identity["checkout_clean"] = clean_result.returncode == 0 and not clean_result.stdout.strip()
     if not identity["checkout_clean"]:
-        identity["problems"].append(
-            "Hermes source checkout has tracked or untracked changes"
-        )
+        identity["problems"].append("Hermes source checkout has tracked or untracked changes")
 
     for filename, field, expected in (
         ("pyproject.toml", "pyproject_sha256", HERMES_PYPROJECT_SHA256),
@@ -4852,9 +4953,10 @@ def preflight(
     hermes_version = "unavailable"
     hermes_runtime: dict[str, Any] | None = None
     profile_status = "not requested"
-    if not isinstance(hermes_profile, str) or HERMES_PROFILE_PATTERN.fullmatch(
-        hermes_profile
-    ) is None:
+    if (
+        not isinstance(hermes_profile, str)
+        or HERMES_PROFILE_PATTERN.fullmatch(hermes_profile) is None
+    ):
         problems.append("Hermes profile name is invalid")
         profile_status = "invalid"
     if require_hermes and not shutil.which("hermes"):
