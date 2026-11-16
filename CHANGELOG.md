@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recorded the 2026-11-16 Hermes v0.23.1 and upstream security-policy review,
+  while retaining v0.20.6 as the only tested pin and marking the expired image
+  baseline and unqualified whole-process lane as release blockers.
 - Added optional independent diagnosis, strict proposal/path binding, exact
   incident-to-scenario path policy, and retained held-out retry verification.
 - Added provider-reported per-attempt and aggregate usage evidence, package/home

@@ -34,6 +34,15 @@ untracked tree, and the qualified hashes of both packaging files immediately
 before every real-model invocation. It does not trust the banner's moving
 `upstream` field.
 
+The latest stable upstream release reviewed on 2026-11-16 is
+[v0.23.1](https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.1)
+at source commit `3b421578588243f920886e6fe79a6faa87ea026e`. It rolls up a
+large v0.23.0-to-v0.23.1 change window that includes gateway, browser-profile,
+plugin, hook, clipboard, and group-chat surfaces. It is a blocked upgrade, not
+a compatible substitute: its complete runtime, profile layout, terminal
+backend, provider behavior, packaging files, and isolation contract have not
+passed this repository's qualification.
+
 ## 2. Install the disposable workflow profile
 
 From this repository's root:
@@ -57,6 +66,15 @@ attempt, and a cleanup failure makes the candidate ineligible for delivery.
 This profile is a state-hygiene boundary, not an operating-system sandbox.
 Controller-owned policy and the Docker terminal restrictions below provide the
 candidate tool-execution boundary.
+
+The current upstream
+[security policy](https://github.com/NousResearch/hermes-agent/blob/v0.23.1/SECURITY.md)
+states that only operating-system isolation contains an adversarial model and
+that terminal-backend isolation does not confine in-process code execution,
+MCP, plugins, hooks, or skills. This profile disables those ambient surfaces,
+but the host Hermes process is not a qualified whole-process sandbox. Do not
+treat this integration as safe for untrusted input or production use without a
+separately approved and tested whole-process design.
 
 The terminal backend remains Docker-based and network-disabled. Besides the
 read-only input, task, and skill mounts and the writable output mount, Hermes

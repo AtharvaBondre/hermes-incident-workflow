@@ -86,6 +86,34 @@ used no customer evidence, and does not establish customer or live readiness.
 The real-model, provider-retention, billing, live-connector, and target-repository
 claims remain unproven until separately authorized and evidenced.
 
+## 2026-11-16 upstream review
+
+- `./scripts/run-local.sh test` passed all 98 tests. The two-attempt
+  `retry-success` run and independent verification passed. The disposable
+  PostgreSQL/Kafka/OpenSearch scenario also passed, independently verified,
+  completed cleanup, and retained its sanitized manifest.
+- All ten reusable controls remain present in the generic controller and local
+  synthetic qualification: optional independent diagnosis, strict readiness
+  and path binding, exact incident paths, genuine held-out retry, exact
+  nullable usage, retained linkage, path redaction, a closed sanitized SHA-256
+  manifest, Docker/service preflight, and explicit synthetic-only claims.
+- Hermes Agent v0.23.1 at commit
+  `3b421578588243f920886e6fe79a6faa87ea026e` is the current stable upstream
+  release. Its broad release window and changed security model require a fresh
+  qualification; v0.20.6 remains the only tested pin.
+- The current upstream security policy recognizes OS-level isolation as the
+  containment boundary and recommends whole-process wrapping for untrusted
+  surfaces. This repository's host Hermes process has not passed such a
+  whole-process qualification, so real-model and untrusted-input readiness
+  remain blocked.
+- The image-vulnerability exception expired on 2026-09-18. No Hermes pin,
+  packaging hash, image digest, or exception was changed without the required
+  review and full requalification.
+- The no-request Hermes sandbox smoke failed before execution because the
+  installed Hermes v0.19.1 checkout and packaging hashes do not match the
+  qualified v0.20.6 revision. The public-surface scan and `git diff --check`
+  passed. No provider or customer system was contacted.
+
 Run `./scripts/run-local.sh test`, the relevant scenario, `verify`,
 `python3 scripts/check-public-surface.py`, and the image-vulnerability check on
 the release candidate rather than relying on this document alone.

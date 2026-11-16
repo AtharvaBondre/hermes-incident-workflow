@@ -22,3 +22,7 @@ python3 scripts/check-image-vulnerabilities.py
 
 Refresh an image and requalify the full workflow before changing the baseline.
 Do not extend an exception solely to make CI pass.
+
+That exception date has passed. The baseline remains release-blocking until
+the pinned images and every changed finding are reviewed and the complete
+workflow is requalified; this document does not authorize extending it.

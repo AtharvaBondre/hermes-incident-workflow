@@ -4,6 +4,15 @@ Hermes Incident Workflow is a local-first reference implementation for bounded A
 
 This is an experimental POC. The default workflow uses synthetic incidents, fixture repositories, disposable containers, and file-based delivery mocks. It does not connect to production systems.
 
+> [!CAUTION]
+> The qualified Hermes boundary remains pinned to v0.20.6, while the latest
+> stable upstream release reviewed on 2026-11-16 is v0.23.1. Upstream now
+> explicitly treats whole-process operating-system isolation as the supported
+> boundary for untrusted inputs. This repository has not qualified that release
+> or a whole-process real-model lane, and its image-vulnerability exception
+> expired on 2026-09-18. Use the current checkout for local synthetic
+> evaluation only, not customer, live, or production work.
+
 ## Why this exists
 
 An AI coding agent should not decide that its own change is safe. This project demonstrates a stricter pattern:
